@@ -1,17 +1,8 @@
 # BiblePro
 
-Version 1.0.0 — by Anthony Chavez (Locale of Dallas, Texas · addpro.dallas.tx@gmail.com)
+Version 1.0.0 — by Anthony Chavez (Dallas, Texas)
 
 BiblePro is a desktop app for projecting Bible verses on any screen, with different translations and an AI research assistant that answers questions using the Bible text itself.
-
-It replaces the old .NET *Digital Bible* app and reuses its library of Bibles (182 versions in many
-languages) and its background images, while fixing its main problems:
-
-- The verse display is a normal window. It can be moved, resized, made fullscreen on any screen,
-  or kept borderless, so you can still switch to other apps.
-- Searching and typing references happen in a separate control window, not on the screen people see.
-- Choosing a version is quick: a searchable version picker, favorites (ADBTAG, KJV, MESSAGE, NKJV
-  by default) and Ctrl+1…9.
 
 ## Setup (Windows)
 
