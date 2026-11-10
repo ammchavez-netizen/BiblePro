@@ -27,6 +27,17 @@ DEFAULTS = {
         "on_top": False,
         "visible": True,
     },
+    "ai": {
+        "indexed_versions": ["001", "002"],        # Ang Dating Biblia, King James Version
+        "embedding_model": "BAAI/bge-m3",
+        "retrieval": {"final_k": 12, "keyword_k": 60, "dense_k": 60,
+                      "min_similarity": 0.35, "language_boost": 0.25},
+        "provider": "gemini",
+        "model": "gemini-3.8-flash",
+        "answers_enabled": True,   # write answers with Gemini when a key is saved
+        "models_cache": [],        # result of the last "Scan Available Models"
+        "models_scanned": "",
+    },
     "style": {
         "font_family": "Segoe UI",
         "bold": True,

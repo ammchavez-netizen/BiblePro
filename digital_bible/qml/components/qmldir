@@ -1,0 +1,10 @@
+singleton Theme 1.0 Theme.qml
+Card 1.0 Card.qml
+AppButton 1.0 AppButton.qml
+AppTextField 1.0 AppTextField.qml
+Chip 1.0 Chip.qml
+SectionLabel 1.0 SectionLabel.qml
+AppSwitch 1.0 AppSwitch.qml
+AppComboBox 1.0 AppComboBox.qml
+ColorSwatch 1.0 ColorSwatch.qml
+VersionPicker 1.0 VersionPicker.qml

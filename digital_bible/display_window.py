@@ -38,6 +38,24 @@ class DisplayWindow(QWidget):
         self._normal_geometry: QRect | None = None
         self.resize(960, 540)
 
+    # ---------------------------------------------------------------- placement
+    def ensure_on_screen(self):
+        """If the saved position is off every screen (e.g. settings copied from a PC with
+        more monitors), center the window on the main screen."""
+        g = self.frameGeometry() if self.isVisible() else self.geometry()
+        for scr in QGuiApplication.screens():
+            visible = scr.availableGeometry().intersected(g)
+            if visible.width() >= 120 and visible.height() >= 80:
+                return
+        prim = QGuiApplication.primaryScreen().availableGeometry()
+        w, h = min(self.width(), prim.width() - 80), min(self.height(), prim.height() - 80)
+        self.setGeometry(prim.x() + (prim.width() - w) // 2, prim.y() + (prim.height() - h) // 2, w, h)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if not self.isFullScreen():
+            self.ensure_on_screen()
+
     # ---------------------------------------------------------------- content
     def set_slide(self, slide: Slide):
         self.slide = slide

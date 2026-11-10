@@ -1,8 +1,3 @@
-"""Draws a verse "slide": background, auto-fitted verse text, reference footer.
-
-The same routine renders the big display window and the small live preview in
-the control window, so what the operator sees is exactly what is projected.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,7 +11,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPixmap
 # Top-left label (reference + version name) layout.
 # All values are in pixels on a 1080p screen; they scale with the window size.
 # ---------------------------------------------------------------------------
-LABEL_LEFT = 36            # space from the left edge of the screen
+LABEL_LEFT = 100            # space from the left edge of the screen
 LABEL_TOP = 75             # space from the top edge of the screen
 LABEL_LINE_GAP = 0         # extra space between the reference and the version name
 LABEL_GAP_BELOW = 12       # space between the label and the verse text
@@ -67,16 +62,17 @@ class Renderer:
         return pm
 
     @staticmethod
-    def _font(style: dict, px: float) -> QFont:
-        f = QFont(style.get("font_family") or "Microsoft Sans Serif")
+    def _font(style: dict, px: float, default_family: str = "Garamond") -> QFont:
+        f = QFont(style.get("font_family") or default_family)
         f.setPixelSize(max(1, int(px)))
         f.setBold(bool(style.get("bold", True)))
         f.setStyleStrategy(QFont.PreferAntialias)
         return f
 
     def _fit_size(self, text: str, rect: QRectF, style: dict, flags: int, max_px: float, min_px: float) -> float:
-        key = (text, int(rect.width()), int(rect.height()), style.get("font_family"),
-               style.get("bold"), int(max_px), flags)
+        font_family = style.get("font_family") or "Garamond"
+        key = (text, int(rect.width()), int(rect.height()), font_family,
+                style.get("bold"), int(max_px), flags)
         if key in self._fit:
             return self._fit[key]
         lo, hi, best = min_px, max_px, min_px
@@ -126,11 +122,12 @@ class Renderer:
         left = LABEL_LEFT * scale
         shadow = style.get("shadow", True)
 
-        # ---- top-left label: reference (white) + version name (yellow italic)
+        # ---- top-left label: reference (Microsoft Sans Serif) + version name (yellow italic)
         header_bottom = rect.y()
         lines = []
         if style.get("show_reference", True) and slide.reference:
-            f = self._font(style, max(8.0, REFERENCE_SIZE * scale))
+            # Explicitly set default font family to Microsoft Sans Serif for reference
+            f = self._font(style, max(8.0, REFERENCE_SIZE * scale), default_family="Microsoft Sans Serif")
             f.setBold(False)
             lines.append((slide.reference, f, QColor(style.get("text_color", "#FFFFFF"))))
         if style.get("show_version", True) and slide.version:
@@ -154,7 +151,7 @@ class Renderer:
             header_bottom = y + fm.height()
             y = header_bottom + LABEL_LINE_GAP * scale
 
-        # ---- verse text, fitted into the area below the label
+        # ---- verse text, fitted into the area below the label (defaults to Garamond)
         top = max(rect.y() + margin * 0.6, header_bottom + LABEL_GAP_BELOW * scale)
         body = QRectF(rect.x() + margin, top, w - 2 * margin, rect.bottom() - margin * 0.6 - top)
         align = Qt.AlignLeft if style.get("align") == "left" else Qt.AlignHCenter

@@ -7,7 +7,14 @@ if not exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python" -m pip install -r requirements.txt
 )
 ".venv\Scripts\python" -m pip install pyinstaller
-".venv\Scripts\pyinstaller" --noconfirm --clean --windowed --name BiblePro --icon "assets\biblepro.ico" --add-data "assets;assets" launcher.py || (pause & exit /b 1)
+rem The QML interface files are bundled with --add-data. The large AI libraries (PyTorch,
+rem sentence-transformers, ChromaDB) are left out for now, so AI Mode in the .exe uses keyword
+rem search; full AI packaging comes in a later phase.
+".venv\Scripts\pyinstaller" --noconfirm --clean --windowed --name BiblePro --icon "assets\biblepro.ico" ^
+    --add-data "assets;assets" --add-data "digital_bible\qml;digital_bible\qml" ^
+    --exclude-module torch --exclude-module sentence_transformers --exclude-module transformers ^
+    --exclude-module chromadb --exclude-module onnxruntime ^
+    launcher.py || (pause & exit /b 1)
 
 rem Remove PyInstaller's temporary build folder so its non-working exe isn't opened by mistake.
 if exist "build" rmdir /s /q "build"
@@ -16,7 +23,7 @@ if exist "BiblePro.spec" del /q "BiblePro.spec"
 rem Copy Bibles, backgrounds and settings next to the exe.
 if exist "data" (
     echo Copying data folder...
-    robocopy "data" "dist\BiblePro\data" /E /NFL /NDL /NJH /NJS >nul
+    robocopy "data" "dist\BiblePro\data" /E /XD "data\models" /NFL /NDL /NJH /NJS >nul
 )
 
 echo.

@@ -1,0 +1,9 @@
+# Extra packages for AI Mode (local search + Gemini). Install with:
+#   .venv\Scripts\python -m pip install -r requirements-ai.txt
+chromadb>=1.0
+sentence-transformers>=3.0
+torch>=2.2
+huggingface_hub>=0.24
+lingua-language-detector>=2.0
+google-genai>=1.0
+keyring>=25.0

@@ -2,7 +2,7 @@
 
 Version 1.0.0 — by Anthony Chavez (Locale of Dallas, Texas · addpro.dallas.tx@gmail.com)
 
-BiblePro is an app for showing Bible verses on a screen or projector. It reuses the old .NET *Digital Bible* apps whole library of Bibles (182 versions in many languages) and its background images.
+BiblePro is a desktop app for projecting Bible verses on any screen, with different translations and an AI research assistant that answers questions using the Bible text itself.
 
 
 ## Setup (Windows)
@@ -61,3 +61,25 @@ digital_bible/
 data/                created by the import (not in git): catalog.sqlite, bibles/, backgrounds/, settings.json
 tests/               pytest tests for the parser/library (need an imported data/ folder)
 ```
+
+## New interface and AI Mode (in progress)
+
+BiblePro now opens with a modern light-theme interface (Qt Quick / QML) with four tabs:
+**Search**, **History**, **Appearance** and **AI Mode**. The previous window is still available:
+
+```bat
+.venv\Scripts\python -m digital_bible --classic
+```
+
+**AI Mode** answers questions using the Bible versions you choose (Ang Dating Biblia and King James
+Version by default). It runs locally: references (e.g. "Romans 8:28"), keyword search and
+meaning-based search with the BAAI/bge-m3 model. To enable meaning-based search:
+
+```bat
+.venv\Scripts\python -m pip install -r requirements-ai.txt
+```
+
+Then open **AI Mode → Settings → Build Index** (or run `python -m digital_bible.ai.cli build`).
+AI-written answers with Google Gemini are added in the next update. Your Gemini API key is stored
+in Windows Credential Manager, never in BiblePro's files.
+

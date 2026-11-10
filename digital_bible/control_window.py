@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColo
                                QPushButton, QSizePolicy, QSlider, QSpinBox, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import APP_NAME, AUTHOR, AUTHOR_EMAIL, AUTHOR_LOCALE, __version__
+from . import APP_NAME, AUTHOR, AUTHOR_EMAIL, AUTHOR_LOCALE, DESCRIPTION, __version__
 from .canvas import Renderer, Slide
 from .display_window import DisplayWindow
 from .importer import import_legacy
@@ -836,7 +836,7 @@ class ControlWindow(QMainWindow):
         box.setText(
             f"<h2 style='margin-bottom:0'>{APP_NAME}</h2>"
             f"<p style='margin-top:2px'>Version {__version__}</p>"
-            f"<p>Show Bible verses on a screen or projector.</p>"
+            f"<p>{DESCRIPTION}</p>"
             f"<p><b>{AUTHOR}</b><br>{AUTHOR_LOCALE}<br>"
             f"<a href='mailto:{AUTHOR_EMAIL}'>{AUTHOR_EMAIL}</a></p>"
             f"<p style='color:gray'>{len(self.library.versions)} Bible versions installed</p>")
