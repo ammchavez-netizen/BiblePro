@@ -4,6 +4,10 @@ Version 1.0.0 — by Anthony Chavez (Dallas, Texas)
 
 BibleQ-AI is a desktop app for projecting Bible verses on any screen, in the translations you choose, with a built-in AI study assistant. Ask a question in your own words and BibleQ-AI uses retrieval-augmented generation (RAG): the bge-m3 embedding model searches your Bibles by meaning, not just keywords, and Google Gemini writes an answer grounded in those passages, with every verse cited.
 
+![BibleQ-AI](assets/ui.png)
+
+*The BibleQ-AI app.*
+
 ## Setup (Windows)
 
 1. Install **Python 3.10+** from python.org. During setup, tick "Add python.exe to PATH".
