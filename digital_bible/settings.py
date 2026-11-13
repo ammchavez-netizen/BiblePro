@@ -18,12 +18,10 @@ DEFAULTS = {
     "last_ref": "Genesis 1:1",
     "history": [],                 # [{"code":..,"start":..,"end":..}]
     "control_geometry": None,
-    "control_on_top": False,
     "display": {
         "geometry": None,          # [x, y, w, h] when windowed
         "screen": None,            # screen name for fullscreen
         "fullscreen": False,
-        "frameless": True,
         "on_top": False,
         "visible": True,
     },
@@ -35,6 +33,7 @@ DEFAULTS = {
         "provider": "gemini",
         "model": "gemini-3.8-flash",
         "answers_enabled": True,   # write answers with Gemini when a key is saved
+        "smart_search": True,      # Gemini suggests which passages to look up before searching
         "models_cache": [],        # result of the last "Scan Available Models"
         "models_scanned": "",
     },
@@ -90,8 +89,11 @@ class Settings:
         """Apply new defaults once to settings saved by an older version."""
         if saved.get("settings_version", 1) < 2:
             self.data["favorites"] = list(DEFAULT_FAVORITES)
-            self.data["display"]["frameless"] = True
         self.data["settings_version"] = SETTINGS_VERSION
+        # settings that are no longer used (classic window, CPU/GPU option)
+        self.data.pop("control_on_top", None)
+        self.data["display"].pop("frameless", None)      # the verse window is always borderless now
+        self.data.get("ai", {}).pop("device", None)
 
     @staticmethod
     def _merge(base: dict, new: dict):

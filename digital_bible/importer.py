@@ -352,6 +352,151 @@ def import_legacy(
     return summary
 
 
+# ------------------------------------------------------- single version files
+
+VERSION_FILE_EXT = {".sqlite", ".db3"}
+
+
+def _open_version_file(path: Path) -> sqlite3.Connection:
+    """Open a Bible file read-only, in memory (the original file is never changed).
+    Works for plain SQLite files and the old app's encrypted .db3 files."""
+    return open_legacy_db(path)
+
+
+def _tables(con: sqlite3.Connection) -> set:
+    return {r[0].lower() for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def _read_version_file(path: Path):
+    """Return (name, info, verses, book_names) from a .db3 (old Digital Bible) or a .sqlite
+    (old Digital Bible, or a version converted by this app)."""
+    src = _open_version_file(path)
+    try:
+        tables = _tables(src)
+        name, info, books, verses = "", "", {}, []
+        if "bible" in tables:                                   # old Digital Bible layout
+            try:
+                row = src.execute("SELECT BookTitle, BookInfo FROM info").fetchone()
+                if row:
+                    name, info = clean_name(row[0]), clean_name(row[1] or "")
+            except sqlite3.Error:
+                pass
+            try:
+                row = src.execute("SELECT * FROM bookname").fetchone()
+                if row:
+                    for b, nm in enumerate(row[1:67], start=1):
+                        books[b] = clean_name(nm) or str(b)
+            except sqlite3.Error:
+                pass
+            for bcv, content in src.execute("SELECT bcv, content FROM bible ORDER BY bcv"):
+                b, c, v = split_bcv(bcv)
+                if 1 <= b <= 66:
+                    verses.append((b * 1_000_000 + c * 1000 + v, b, c, v, clean_text(content)))
+        elif "verses" in tables:                                # this app's own layout
+            try:
+                meta = dict(src.execute("SELECT key, value FROM info").fetchall())
+            except sqlite3.Error:
+                meta = {}
+            name, info = clean_name(meta.get("name") or ""), clean_name(meta.get("info") or "")
+            for _k, b, c, v, t in src.execute("SELECT key, book, chapter, verse, text FROM verses"):
+                if 1 <= int(b) <= 66:
+                    verses.append((int(b) * 1_000_000 + int(c) * 1000 + int(v), int(b), int(c), int(v), clean_text(t)))
+        else:
+            raise ValueError("this file doesn't contain a Bible (no 'bible' or 'verses' table)")
+    finally:
+        src.close()
+    verses.sort()
+    if not any(x[4] for x in verses):
+        raise ValueError("no verses found in this file")
+    return name or path.stem, info, verses, books
+
+
+def import_files(
+    paths,
+    data_dir: Path,
+    progress: Optional[Callable[[int, int, str], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> dict:
+    """Add Bible versions from single .sqlite / .db3 files to ``data_dir``.
+
+    Each file becomes a new version with its own number; a file that is already in the
+    library (same name and same number of verses) is skipped. The chosen files are only read."""
+    paths = [Path(p) for p in paths]
+    data_dir = Path(data_dir)
+    bible_dir = data_dir / "bibles"
+    bible_dir.mkdir(parents=True, exist_ok=True)
+    cat = sqlite3.connect(data_dir / "catalog.sqlite")
+    cat.executescript(CATALOG_SCHEMA)
+    summary = {"imported": [], "failed": [], "skipped": [], "images": 0}
+    try:
+        for n, path in enumerate(paths):
+            if cancelled and cancelled():
+                break
+            if progress:
+                progress(n, len(paths), f"Importing {path.name}")
+            try:
+                if path.suffix.lower() not in VERSION_FILE_EXT:
+                    raise ValueError("only .sqlite and .db3 files can be imported")
+                name, info, verses, books = _read_version_file(path)
+                filled = [x for x in verses if x[4]]
+                dup = cat.execute("SELECT code FROM versions WHERE name=? AND verse_count=?",
+                                  (name, len(filled))).fetchone()
+                if dup:
+                    summary["skipped"].append((path.name, f"already in the library as {name}"))
+                    continue
+                used = {r[0] for r in cat.execute("SELECT code FROM versions")}
+                used |= {p.stem for p in bible_dir.glob("*.sqlite")}
+                num = 1
+                while f"{num:03d}" in used:
+                    num += 1
+                code = f"{num:03d}"
+
+                out_path = bible_dir / f"{code}.sqlite"
+                tmp_path = out_path.with_suffix(".tmp")
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                dst = sqlite3.connect(tmp_path)
+                dst.executescript(BIBLE_SCHEMA)
+                dst.executemany("INSERT OR REPLACE INTO verses VALUES (?,?,?,?,?)", verses)
+                dst.executemany("INSERT INTO info VALUES (?,?)",
+                                [("name", name), ("info", info), ("source", path.name)])
+                dst.commit()
+                dst.close()
+                os.replace(tmp_path, out_path)
+
+                # chapter lengths: add what this file has (an Old- or New-Testament-only
+                # file still gives its books their chapters), keeping the longest count
+                counts = {}
+                for _, b, c, v, _t in verses:
+                    counts[(b, c)] = max(counts.get((b, c), 0), v)
+                cat.executemany("INSERT INTO chapters VALUES (?,?,?) ON CONFLICT(book, chapter) "
+                                "DO UPDATE SET verses = max(verses, excluded.verses)",
+                                [(b, c, v) for (b, c), v in counts.items()])
+
+                used_abbr = {r[0] for r in cat.execute("SELECT abbr FROM versions")}
+                abbr = _abbr_from_title(name)
+                if abbr in used_abbr:
+                    abbr = f"{abbr}-{code}"
+                order = cat.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM versions").fetchone()[0]
+                cat.execute(
+                    "INSERT OR REPLACE INTO versions VALUES (?,?,?,?,?,?,?,?,?)",
+                    (code, abbr, name, _guess_language(name, None), info, len(filled),
+                     int(any(x[1] <= 39 for x in filled)), int(any(x[1] >= 40 for x in filled)), order),
+                )
+                cat.execute("DELETE FROM book_names WHERE code=?", (code,))
+                cat.executemany("INSERT INTO book_names VALUES (?,?,?)",
+                                [(code, b, nm) for b, nm in books.items()])
+                cat.commit()
+                summary["imported"].append(code)
+            except Exception as exc:          # keep going; report at the end
+                summary["failed"].append((path.name, str(exc)))
+    finally:
+        cat.close()
+    if progress:
+        progress(len(paths), len(paths), "Done")
+    return summary
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("legacy_dir", help="Folder of the old app (contains Bibles, Images, Settings)")

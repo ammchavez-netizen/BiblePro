@@ -18,7 +18,7 @@ import threading
 import time
 from dataclasses import asdict
 
-from PySide6.QtCore import Property, QObject, QRect, Signal, Slot
+from PySide6.QtCore import Property, QObject, QRect, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from ..ai import generator as gen
@@ -26,9 +26,10 @@ from ..ai.embeddings import EMBEDDING_MODELS, Embedder
 from ..ai.indexer import IndexManager
 from ..ai.language import detect_language
 from ..ai.retriever import RetrievalConfig, Retriever
-from ..library import split_key
+from .chat_model import ChatModel
 
-KEYRING_SERVICE = "BiblePro"
+KEYRING_SERVICE = "BibleQ-AI"
+OLD_KEYRING_SERVICES = ("BiblePro",)      # earlier app names; a saved key is moved over once
 
 
 def _packages() -> dict:
@@ -43,11 +44,32 @@ def _packages() -> dict:
     return out
 
 
+
+def _migrate_key(kr):
+    """Move a Gemini key saved under an old app name to the current one (only if none is saved yet)."""
+    try:
+        if kr.get_password(KEYRING_SERVICE, "gemini_api_key"):
+            return
+        for old in OLD_KEYRING_SERVICES:
+            key = kr.get_password(old, "gemini_api_key")
+            if key:
+                kr.set_password(KEYRING_SERVICE, "gemini_api_key", key)
+                try:
+                    kr.delete_password(old, "gemini_api_key")
+                except Exception:
+                    pass
+                return
+    except Exception:
+        pass
+
+
 class _Bridge(QObject):
     """Signals emitted from worker threads (delivered on the UI thread)."""
     progress = Signal(dict)
     indexDone = Signal(dict)
     answer = Signal(int, dict)
+    partial = Signal(int, dict)
+    warmed = Signal(dict)
     downloadDone = Signal(str)
     geminiDone = Signal(str, dict)
 
@@ -62,6 +84,7 @@ class AiController(QObject):
     keyChanged = Signal()
     geminiChanged = Signal()
     popoutChanged = Signal()
+    warmupChanged = Signal()
     notice = Signal(str)
 
     def __init__(self, library, settings, main_ctrl=None):
@@ -71,12 +94,22 @@ class AiController(QObject):
         self._bridge.progress.connect(self._on_progress)
         self._bridge.indexDone.connect(self._on_index_done)
         self._bridge.answer.connect(self._on_answer)
+        self._bridge.partial.connect(self._on_partial)
+        self._bridge.warmed.connect(self._on_warmed)
         self._bridge.downloadDone.connect(self._on_download_done)
         self._bridge.geminiDone.connect(self._on_gemini_done)
         self._gemini_busy = ""                   # "", "test", "scan"
         self._gemini_result = {}
         self._popped = False
-        self._messages: list = []
+        self._chat = ChatModel(self)
+        self._chat.countChanged.connect(self.chatChanged)
+        self._streaming: dict[int, float] = {}       # row -> time the last piece of text arrived
+        self._stall_timer = QTimer(self)
+        self._stall_timer.setInterval(400)
+        self._stall_timer.timeout.connect(self._check_stalls)
+        self._client_cache = None                    # (api key, GeminiClient) reused between questions
+        self._embedders: dict = {}                   # model -> loaded Embedder, shared
+        self._warm = {"state": "idle", "message": ""}
         self._busy = False
         self._progress = {"running": False, "stage": "idle", "message": "", "current": "",
                           "done": 0, "total": 0, "percent": 0, "errors": []}
@@ -89,16 +122,42 @@ class AiController(QObject):
         self._lock = threading.Lock()
         self._packages = _packages()
         self.refreshStatus()
+        if main_ctrl is not None:                # a Bible version was imported
+            main_ctrl.libraryChanged.connect(self._on_library_changed)
+        # Load the search engine in the background shortly after start-up, so the first
+        # question doesn't wait for bge-m3 (several seconds) and the language detector.
+        QTimer.singleShot(1500, self.warmUp)
+
+    @Slot()
+    def _on_library_changed(self):
+        """New versions show up in AI Mode Settings; the index re-reads the Bible files."""
+        if self._progress.get("running"):         # don't swap the index while it's being built
+            self.settingsChanged.emit()
+            return
+        with self._lock:
+            self._im = None
+            self._retriever = None
+            self._retriever_key = None
+        self.settingsChanged.emit()
+        self.refreshStatus()
 
     # ================================================================ helpers
     @property
     def ai(self) -> dict:
         return self.settings["ai"]
 
+    def _embedder(self) -> Embedder:
+        """One shared embedding model, so it is loaded into memory only once."""
+        k = self.ai["embedding_model"]
+        if k not in self._embedders:
+            self._embedders = {k: Embedder(k, self.library.data_dir / "models")}
+        return self._embedders[k]
+
     def manager(self) -> IndexManager:
         key = (self.ai["embedding_model"], tuple(self.ai["indexed_versions"]))
         if self._im is None or (self._im.embedding_model, tuple(self._im.versions)) != key:
-            self._im = IndexManager(self.library.data_dir, *key[:1], list(key[1]))
+            self._im = IndexManager(self.library.data_dir, key[0], list(key[1]))
+            self._im.embedder = self._embedder          # share the loaded model
         return self._im
 
     def _save(self):
@@ -108,7 +167,7 @@ class AiController(QObject):
     def _get_packages(self):
         return {"ok": all(v for k, v in self._packages.items() if k not in ("google-genai", "keyring")),
                 "missing": [k for k, v in self._packages.items() if not v],
-                "frozen": bool(getattr(sys, "frozen", False))}      # running as BiblePro.exe
+                "frozen": bool(getattr(sys, "frozen", False))}      # running as BibleQ-AI.exe
     packages = Property("QVariantMap", _get_packages, notify=statusChanged)
 
     def _get_status(self):
@@ -119,9 +178,21 @@ class AiController(QObject):
         return self._progress
     progress = Property("QVariantMap", _get_progress, notify=progressChanged)
 
+    @property
+    def _messages(self) -> list:
+        return self._chat.items
+
     def _get_messages(self):
-        return self._messages
+        return self._chat.items
     messages = Property("QVariantList", _get_messages, notify=chatChanged)
+
+    def _get_chat_model(self):
+        return self._chat
+    chatModel = Property(QObject, _get_chat_model, constant=True)
+
+    def _get_warmup(self):
+        return self._warm
+    warmup = Property("QVariantMap", _get_warmup, notify=warmupChanged)
 
     def _get_busy(self):
         return self._busy
@@ -174,9 +245,10 @@ class AiController(QObject):
         elif not self._read_key():
             note = "Add a Gemini API key to get AI-written answers. Without it, AI Mode shows the passages it finds."
         else:
-            note = "Answers are written by Gemini using only the Bible passages BiblePro finds. Only your question and those passages are sent to Google."
+            note = "Answers are written by Gemini using only the Bible passages BibleQ-AI finds. Only your question and those passages are sent to Google."
         return {"provider": self.ai.get("provider", "gemini"), "model": model, "models": models,
                 "enabled": bool(self.ai.get("answers_enabled", True)),
+                "smart_search": bool(self.ai.get("smart_search", True)),
                 "available": self._gemini_ready(), "note": note,
                 "busy": self._gemini_busy, "result": self._gemini_result,
                 "scanned": self.ai.get("models_scanned", "")}
@@ -257,7 +329,7 @@ class AiController(QObject):
                 res = {"stage": "error", "message": str(exc), "errors": [str(exc)]}
             self._bridge.indexDone.emit(res)
 
-        threading.Thread(target=work, daemon=True, name="biblepro-index").start()
+        threading.Thread(target=work, daemon=True, name="bibleq-index").start()
 
     @Slot(dict)
     def _on_progress(self, p):
@@ -322,7 +394,7 @@ class AiController(QObject):
             except Exception as exc:
                 msg = f"Download failed: {exc}"
             self._bridge.downloadDone.emit(msg)
-        threading.Thread(target=work, daemon=True, name="biblepro-download").start()
+        threading.Thread(target=work, daemon=True, name="bibleq-download").start()
 
     @Slot(str)
     def _on_download_done(self, msg):
@@ -348,9 +420,12 @@ class AiController(QObject):
     def _keyring(self):
         try:
             import keyring
-            return keyring
         except ImportError:
             return None
+        if not getattr(self, "_key_migrated", False):
+            self._key_migrated = True
+            _migrate_key(keyring)
+        return keyring
 
     def _read_key(self) -> str:
         kr = self._keyring()
@@ -393,6 +468,7 @@ class AiController(QObject):
                 kr.set_password(KEYRING_SERVICE, "gemini_api_key", key)
                 self.notice.emit("API key saved in Windows Credential Manager.")
                 self._gemini_result = {}
+                self._client_cache = None
             self.keyChanged.emit()
             self.geminiChanged.emit()
         except Exception as exc:
@@ -407,6 +483,7 @@ class AiController(QObject):
         except Exception:
             pass
         self._gemini_result = {}
+        self._client_cache = None
         self.keyChanged.emit()
         self.geminiChanged.emit()
         self.notice.emit("API key removed.")
@@ -445,7 +522,7 @@ class AiController(QObject):
                 res = {"ok": False, "kind": err.kind, "message": err.message}
             self._bridge.geminiDone.emit(what, res)
 
-        threading.Thread(target=work, daemon=True, name=f"biblepro-gemini-{what}").start()
+        threading.Thread(target=work, daemon=True, name=f"bibleq-gemini-{what}").start()
 
     @Slot(str, dict)
     def _on_gemini_done(self, what, res):
@@ -485,10 +562,48 @@ class AiController(QObject):
             self.notice.emit(f"AI answers will use {model_id}.")
 
     @Slot(bool)
+    def setSmartSearch(self, on: bool):
+        self.ai["smart_search"] = bool(on)
+        self._save()
+        self.geminiChanged.emit()
+
+    @Slot(bool)
     def setAnswersEnabled(self, on: bool):
         self.ai["answers_enabled"] = bool(on)
         self._save()
         self.geminiChanged.emit()
+
+    # ================================================================ warm-up
+    @Slot()
+    def warmUp(self):
+        """Load the language detector, search indexes and bge-m3 in the background."""
+        if self._warm["state"] == "loading" or self._progress.get("running"):
+            return
+        self._warm = {**self._warm, "state": "loading", "message": "Loading the search engine…"}
+        self.warmupChanged.emit()
+
+        def work():
+            res = {"state": "ready", "message": ""}
+            t0 = time.perf_counter()
+            try:
+                detect_language("warm up the language detector")
+                ret = self._get_retriever()
+                if ret.embedder is not None and ret.store is not None:
+                    ret.embedder.encode_query("warm up")          # loads bge-m3 into memory
+                    res["message"] = f"Search engine ready (loaded in {time.perf_counter() - t0:.0f} s)."
+                else:
+                    res["message"] = "Keyword search ready. " + (ret.dense_off_reason[:1].upper()
+                                                                 + ret.dense_off_reason[1:] + ".")
+            except Exception as exc:
+                res = {**res, "state": "error", "message": f"Couldn't load the search engine: {exc}"}
+            self._bridge.warmed.emit(res)
+
+        threading.Thread(target=work, daemon=True, name="bibleq-warmup").start()
+
+    @Slot(dict)
+    def _on_warmed(self, res):
+        self._warm = res
+        self.warmupChanged.emit()
 
     # ================================================================ chat pop-out window
     def _get_popped(self):
@@ -515,10 +630,10 @@ class AiController(QObject):
             # chat frame margins (fall back to the main window's when not shown yet)
             if cf.width() > cg.width():
                 ml, mt = cg.x() - cf.x(), cg.y() - cf.y()
-                mr, mb = cf.right() - cg.right(), cf.bottom() - cg.bottom()
+                mr = cf.right() - cg.right()
             else:
                 ml, mt = mg.x() - mf.x(), mg.y() - mf.y()
-                mr, mb = mf.right() - mg.right(), mf.bottom() - mg.bottom()
+                mr = mf.right() - mg.right()
             # Windows 10/11 frames include ~7px invisible borders on left/right/bottom
             overlap = 2 * min(ml, mr) if min(ml, mr) <= 10 else 0
             w, h = mg.width(), mg.height()
@@ -553,72 +668,143 @@ class AiController(QObject):
         question = question.strip()
         if not question or self._busy:
             return
-        self._messages = self._messages + [{"role": "user", "text": question, "sources": [], "notes": []}]
-        idx = len(self._messages)
-        self._messages = self._messages + [{"role": "assistant", "text": "", "pending": True,
-                                             "sources": [], "notes": [], "language": ""}]
-        self.chatChanged.emit()
+        # earlier exchanges, with citation markers turned back into real references
+        history = [(m_prev["text"], gen.readable_history(m.get("plain", ""), m.get("sources") or []))
+                   for m_prev, m in zip(self._chat.items, self._chat.items[1:])
+                   if m["role"] == "assistant" and m.get("mode") == "ai" and m_prev["role"] == "user"]
+        self._chat.append({"role": "user", "text": question, "sources": [], "notes": []})
+        idx = self._chat.append({"role": "assistant", "text": "", "pending": True, "phase": "searching",
+                                 "sources": [], "notes": [], "language": ""})
         self._set_busy(True)
-        history = [(self._messages[i - 1]["text"], self._messages[i].get("plain", self._messages[i]["text"]))
-                   for i in range(1, idx - 1)
-                   if self._messages[i]["role"] == "assistant" and self._messages[i].get("mode") == "ai"
-                   and self._messages[i - 1]["role"] == "user"]
 
         def work():
+            t0 = time.perf_counter()
             try:
+                # Gemini suggests which passages to look up (in parallel with loading the search)
+                key, reason = self._ai_unavailable_reason()
+                plan, plan_note, fut = None, "", None
+                pool = None
+                if not reason and self.ai.get("smart_search", True):
+                    from concurrent.futures import ThreadPoolExecutor
+                    pool = ThreadPoolExecutor(max_workers=1)
+                    model = self.ai.get("model") or gen.DEFAULT_MODEL
+                    fut = pool.submit(gen.plan_search, self._gemini_client(key), model, question, history)
                 lang = detect_language(question)
                 ret = self._get_retriever()
-                res = ret.retrieve(question, lang.code if lang else None)
+                if fut is not None:
+                    try:
+                        plan = fut.result(timeout=20)
+                    except gen.GeminiError as exc:
+                        plan_note = "Gemini couldn't suggest passages: " + exc.message
+                    except Exception as exc:
+                        plan_note = f"Gemini couldn't suggest passages ({type(exc).__name__})."
+                    finally:
+                        pool.shutdown(wait=False)
+                res = ret.retrieve(question, lang.code if lang else None,
+                                   suggested_refs=plan.references if plan else None,
+                                   extra_query=plan.query if plan else "")
+                if plan_note:
+                    res.notes.append(plan_note)
                 sources = [{"key": v.key, "code": v.code, "abbr": v.abbr, "translation": v.translation,
                             "language": v.language, "reference": v.reference, "text": v.text,
                             "methods": v.methods,
                             "similarity": round(v.similarity, 2) if v.similarity is not None else None}
                            for v in res.verses]
-                out = self._compose(question, lang, sources, res.notes, history)
+                t_search = time.perf_counter() - t0
+                out = self._compose(question, lang, sources, res.notes, history,
+                                    on_partial=lambda upd: self._bridge.partial.emit(idx, upd),
+                                    t0=t0, t_search=t_search)
             except Exception as exc:
                 out = {"role": "assistant", "text": f"Something went wrong while searching: {exc}",
-                       "sources": [], "notes": [], "language": "", "pending": False, "error": True}
+                       "sources": [], "notes": [], "language": "", "pending": False, "error": True,
+                       "phase": "done"}
             self._bridge.answer.emit(idx, out)
 
-        threading.Thread(target=work, daemon=True, name="biblepro-ask").start()
+        threading.Thread(target=work, daemon=True, name="bibleq-ask").start()
 
-    def _compose(self, question, lang, sources, notes, history) -> dict:
-        """Ask Gemini to answer from `sources`, or fall back to listing the passages."""
+    def _ai_unavailable_reason(self) -> tuple[str, str]:
+        """(api key, reason). The reason is empty when Gemini can be asked."""
+        if not self.ai.get("answers_enabled", True):
+            return "", "AI-written answers are turned off in Settings."
+        if not self._packages.get("google-genai"):
+            return "", gen.FRIENDLY["no_package"]
+        key = self._read_key()
+        if not key:
+            return "", gen.FRIENDLY["no_key"]
+        return key, ""
+
+    def _gemini_client(self, key: str):
+        """Reuse one client (and its open connection to Google) while the key stays the same."""
+        cache = getattr(self, "_client_cache", None)
+        if cache and cache[0] == key:
+            return cache[1]
+        client = gen.GeminiClient(key)
+        self._client_cache = (key, client)
+        return client
+
+    def _compose(self, question, lang, sources, notes, history, on_partial=None, t0=None, t_search=0.0) -> dict:
+        """Ask Gemini to answer from `sources` (streaming the text through `on_partial`),
+        or fall back to listing the passages."""
+        t0 = t0 or time.perf_counter()
         notes = list(notes)
-        base = {"role": "assistant", "sources": sources, "cited": [], "notes": notes,
+        base = {"role": "assistant", "sources": sources, "cited": [], "notes": notes, "phase": "done",
                 "language": lang.name if lang else "", "pending": False, "mode": "passages", "model": ""}
+        timing = {"search": round(t_search, 1)}
         if not sources:
-            return {**base, "text": "No matching passages were found in the indexed Bibles, so there is "
-                                    "nothing to answer from. Try different words or a Bible reference."}
-        use_ai = self.ai.get("answers_enabled", True)
-        key = self._read_key() if use_ai else ""
-        reason = ""
-        if not use_ai:
-            reason = "AI-written answers are turned off in Settings."
-        elif not self._packages.get("google-genai"):
-            reason = gen.FRIENDLY["no_package"]
-        elif not key:
-            reason = gen.FRIENDLY["no_key"]
-        else:
+            return {**base, "timing": timing,
+                    "text": "No matching passages were found in the indexed Bibles, so there is "
+                            "nothing to answer from. Try different words or a Bible reference."}
+        key, reason = self._ai_unavailable_reason()
+        if not reason:
             model = self.ai.get("model") or gen.DEFAULT_MODEL
+            # 1) show the verses right away while Gemini writes
+            if on_partial:
+                on_partial({**base, "phase": "generating", "mode": "ai", "model": model, "text": ""})
+            raw = ""
+            t_first = None
             try:
-                client = gen.GeminiClient(key)
-                checked = gen.answer(client, model, question, lang.name if lang else None, sources, history)
+                client = self._gemini_client(key)
+                prompt = gen.build_prompt(question, gen.make_passages(sources), history)
+                system = gen.system_prompt(lang.name if lang else None)
+                stream = getattr(client, "stream", None)
+                if stream is None:                       # (simple clients used in tests)
+                    raw = client.generate(model, prompt, system=system)
+                    t_first = time.perf_counter()
+                else:
+                    last_emit = 0.0
+                    for piece in stream(model, prompt, system=system):
+                        raw += piece
+                        now = time.perf_counter()
+                        t_first = t_first or now
+                        if on_partial and now - last_emit > 0.08:        # ~12 screen updates a second
+                            last_emit = now
+                            on_partial({"text": gen.display_partial(raw, sources)})
+                checked = gen.validate_citations(raw, len(sources))
                 if checked.invalid:
                     notes.append("Removed citation(s) that didn't match a retrieved passage: "
                                  + ", ".join(sorted(set(checked.invalid))))
                 if not checked.cited:
                     notes.append("The answer didn't cite specific passages; the passages it was given are listed below.")
+                timing.update(first=round((t_first or time.perf_counter()) - t0, 1),
+                              total=round(time.perf_counter() - t0, 1))
                 return {**base, "mode": "ai", "model": model, "cited": checked.cited, "notes": notes,
-                        "plain": checked.text, "text": gen.link_citations(checked.text, sources)}
+                        "plain": checked.text, "text": gen.link_citations(checked.text, sources), "timing": timing}
             except gen.GeminiError as exc:
                 reason = exc.message
+                if exc.kind in ("invalid_key", "permission"):
+                    self._client_cache = None
             except Exception as exc:
                 reason = gen.classify(exc, key).message
+            if raw.strip():                              # stopped part-way: keep what was written
+                checked = gen.validate_citations(raw, len(sources))
+                notes.append(f"Gemini stopped before finishing: {reason}")
+                return {**base, "mode": "ai", "model": model, "cited": checked.cited, "notes": notes,
+                        "plain": checked.text, "text": gen.link_citations(checked.text, sources),
+                        "timing": {**timing, "total": round(time.perf_counter() - t0, 1)}}
         n = len(sources)
         text = (f"I found {n} relevant passage{'s' if n != 1 else ''} in the indexed Bibles (below)."
                 + (f"\n\n*No AI-written answer: {reason}*" if reason else ""))
-        return {**base, "text": text}
+        return {**base, "text": text, "timing": timing}
 
     def _get_retriever(self) -> Retriever:
         with self._lock:
@@ -640,7 +826,7 @@ class AiController(QObject):
             store = emb = None
             pk = self._get_packages()
             if not pk["ok"]:
-                reason = ("meaning-based search isn't included in BiblePro.exe — start BiblePro with run.bat for it"
+                reason = ("meaning-based search isn't included in BibleQ-AI.exe — start BibleQ-AI with run.bat for it"
                           if pk["frozen"] else
                           "the AI components aren't installed (pip install -r requirements-ai.txt)")
             elif not st.embeddings:
@@ -648,7 +834,7 @@ class AiController(QObject):
             else:
                 reason = ""
                 try:
-                    store, emb = im.vector_store(), im.embedder()
+                    store, emb = im.vector_store(), self._embedder()
                 except Exception as exc:
                     store = emb = None
                     reason = f"the embedding model couldn't be loaded ({type(exc).__name__})"
@@ -663,11 +849,31 @@ class AiController(QObject):
             return self._retriever
 
     @Slot(int, dict)
+    def _on_partial(self, idx, upd):
+        """Text written so far (or the verses, before Gemini starts)."""
+        self._streaming[idx] = time.monotonic()
+        self._chat.update(idx, {**upd, "stalled": False})
+        if not self._stall_timer.isActive():
+            self._stall_timer.start()
+
+    @Slot()
+    def _check_stalls(self):
+        """Show "Gemini is thinking…" when no new text has arrived for a moment."""
+        now = time.monotonic()
+        for idx, last in list(self._streaming.items()):
+            if idx < len(self._chat) and self._chat[idx].get("phase") == "generating":
+                stalled = now - last > 1.2
+                if stalled != bool(self._chat[idx].get("stalled")):
+                    self._chat.update(idx, {"stalled": stalled})
+            else:
+                self._streaming.pop(idx, None)
+        if not self._streaming:
+            self._stall_timer.stop()
+
+    @Slot(int, dict)
     def _on_answer(self, idx, out):
-        msgs = list(self._messages)
-        if 0 <= idx < len(msgs):
-            msgs[idx] = out
-        self._messages = msgs
+        self._streaming.pop(idx, None)
+        self._chat.update(idx, {**out, "stalled": False}, merge=False)
         self.chatChanged.emit()
         self._set_busy(False)
 
@@ -678,8 +884,7 @@ class AiController(QObject):
     @Slot()
     def clearChat(self):
         if not self._busy:
-            self._messages = []
-            self.chatChanged.emit()
+            self._chat.clear()
 
     @Slot(int, str)
     def openVerse(self, key: int, code: str):

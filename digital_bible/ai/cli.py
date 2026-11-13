@@ -29,7 +29,7 @@ def _manager(settings) -> IndexManager:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="biblepro-ai", description=__doc__,
+    ap = argparse.ArgumentParser(prog="bibleq-ai", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")

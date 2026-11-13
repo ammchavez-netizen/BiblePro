@@ -6,7 +6,7 @@ Formats are handled by small *schema adapters*. Each adapter looks at the
 tables/columns of a SQLite file and says whether it can read it. Today there
 are two formats:
 
-* ``ConvertedAdapter`` - BiblePro's own files  data/bibles/NNN.sqlite
+* ``ConvertedAdapter`` - BibleQ-AI's own files  data/bibles/NNN.sqlite
   (table ``verses(key, book, chapter, verse, text)`` + ``info``)
 * ``LegacyAdapter``    - the old Digital Bible ``.db3`` files
   (RC4-encrypted; table ``bible(bcv, content)`` + ``bookname`` + ``info``)
@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
 
-from ..library import ENGLISH_BOOKS, make_key, split_key
+from ..library import ENGLISH_BOOKS, make_key
 
 # OSIS book identifiers (a standard, language-neutral book id), 1..66.
 OSIS_BOOKS = [
@@ -257,7 +257,7 @@ def discover_sources(data_dir: Path, extra_dirs: tuple = ()) -> list[BibleSource
         if code in seen:                 # converted copy wins over the legacy original
             continue
         src = BibleSource(path=path, code=code)
-        # Files BiblePro converted itself (listed in the catalog) are known to be in its own
+        # Files BibleQ-AI converted itself (listed in the catalog) are known to be in its own
         # format, so they need not be opened just to detect the schema. Anything else is inspected.
         if code in catalog and path.suffix == ".sqlite" and path.parent == data_dir / "bibles":
             adapter = ConvertedAdapter()

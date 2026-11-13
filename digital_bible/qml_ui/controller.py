@@ -1,10 +1,7 @@
-"""Main QML controller: everything the classic control window does, exposed to QML."""
+"""Main controller: verses, versions, display window, search, history and appearance, exposed to QML."""
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QThread, QTimer, QUrl, Signal, Slot
@@ -13,13 +10,34 @@ from PySide6.QtWidgets import QColorDialog, QFileDialog
 
 from .. import APP_NAME, AUTHOR, AUTHOR_EMAIL, AUTHOR_LOCALE, DESCRIPTION, __version__
 from ..canvas import Renderer, Slide
-from ..control_window import HISTORY_MAX, ImportWorker
 from ..display_window import DisplayWindow
+from ..importer import import_files
 from ..library import NT_BOOKS, OT_BOOKS, Library, split_key
 from ..reference import BookResolver, ParseError, Ref, ref_from_key
 from ..settings import Settings
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+HISTORY_MAX = 300
+
+
+class ImportWorker(QObject):
+    """Converts Bible files (.sqlite / .db3) in a background thread."""
+    progress = Signal(int, int, str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, src, dst: Path):
+        super().__init__()
+        self.src, self.dst = src, dst
+        self.cancel = False
+
+    @Slot()
+    def run(self):
+        try:
+            summary = import_files(self.src, self.dst, progress=self.progress.emit, cancelled=lambda: self.cancel)
+            self.finished.emit(summary)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 def _title(name: str) -> str:
@@ -47,6 +65,7 @@ class Controller(QObject):
     def __init__(self, library: Library, settings: Settings):
         super().__init__()
         self.library, self.settings = library, settings
+        self.settings["history"] = []          # each session starts with an empty history
         self.renderer = Renderer(library.data_dir / "backgrounds")
         self.resolver = BookResolver(library)
         self.version = settings["version"] if settings["version"] in library.by_code else (
@@ -72,12 +91,12 @@ class Controller(QObject):
         self.display.blank_toggled.connect(self.toggleBlank)
         self.display.typed.connect(self.focusReference.emit)
         self.display.focus_controls.connect(lambda: self.focusReference.emit(""))
+        self.display.reset_size_requested.connect(self.resetDisplaySize)
         self.display.state_changed.connect(self._display_state_changed)
         d = settings.display
         if d["geometry"]:
             self.display.setGeometry(*d["geometry"])
         self.display.set_on_top(bool(d["on_top"]))
-        self.display.set_frameless(bool(d["frameless"]))
 
     # ================================================================ helpers
     def _save(self):
@@ -156,8 +175,12 @@ class Controller(QObject):
         for i, e in enumerate(self.settings["history"]):
             v = self.library.by_code.get(e["code"])
             if v:
+                try:
+                    text = " ".join(self.library.passage(v.code, e["start"], e["end"]).text.split())
+                except Exception:
+                    text = ""
                 out.append({"index": i, "reference": self._ref_label(v, e["start"], e["end"]),
-                            "abbr": v.abbr, "code": v.code})
+                            "abbr": v.abbr, "code": v.code, "text": text})
         return out
     history = Property("QVariantList", _get_history, notify=historyChanged)
 
@@ -185,7 +208,8 @@ class Controller(QObject):
             screens.append({"name": s.name(), "label": f"Screen {i}: {g.width()}×{g.height()}"
                             + ("  (main)" if s == primary else "")})
         return {"visible": self.display.isVisible(), "fullscreen": self.display.isFullScreen(),
-                "onTop": self.display.on_top, "frameless": self.display.frameless, "screens": screens}
+                "onTop": self.display.on_top, "screens": screens,
+                "aspect": self.display_aspect()}
     displayState = Property("QVariantMap", _get_display, notify=displayChanged)
 
     def _get_import(self):
@@ -196,10 +220,6 @@ class Controller(QObject):
         return {"app": APP_NAME, "version": __version__, "author": AUTHOR, "locale": AUTHOR_LOCALE,
                 "email": AUTHOR_EMAIL, "description": DESCRIPTION, "versions": len(self.library.versions)}
     about = Property("QVariantMap", _get_about, constant=True)
-
-    def _get_books(self):
-        return self.resolver.completions(self.version) if self.library.versions else []
-    bookNames = Property("QVariantList", _get_books, notify=versionChanged)
 
     # ================================================================ navigation
     @Slot(str)
@@ -403,6 +423,27 @@ class Controller(QObject):
         self.settings.display["screen"] = screen_name
         self.displayChanged.emit()
 
+    def background_size(self) -> tuple[int, int]:
+        """Pixel size of the background image in use (1920×1080 when there is none)."""
+        st = self.settings.style
+        if st.get("bg_mode", "image") == "image":
+            path = self.renderer.background_path(st)
+            if path is not None and path.exists():
+                from PySide6.QtGui import QImageReader
+                sz = QImageReader(str(path)).size()      # reads the header only
+                if sz.isValid() and sz.width() > 0 and sz.height() > 0:
+                    return sz.width(), sz.height()
+        return 1920, 1080
+
+    @Slot()
+    def resetDisplaySize(self):
+        """Verse window back to a quarter of the screen, in the background image's shape."""
+        self.display.show()
+        msg = self.display.reset_size(*self.background_size())
+        self.settings.display["visible"] = True
+        self.displayChanged.emit()
+        self.toast.emit(msg)
+
     @Slot()
     def leaveFullscreen(self):
         self.display.leave_fullscreen()
@@ -419,11 +460,6 @@ class Controller(QObject):
         self.display.set_on_top(on)
         self.displayChanged.emit()
 
-    @Slot(bool)
-    def setFrameless(self, on: bool):
-        self.display.set_frameless(on)
-        self.displayChanged.emit()
-
     @Slot()
     def toggleBlank(self):
         self._blank = not self._blank
@@ -432,7 +468,6 @@ class Controller(QObject):
     def _display_state_changed(self):
         d = self.settings.display
         d["fullscreen"] = self.display.isFullScreen()
-        d["frameless"] = self.display.frameless
         d["on_top"] = self.display.on_top
         g = self.display.windowed_geometry()
         d["geometry"] = [g.x(), g.y(), g.width(), g.height()]
@@ -479,23 +514,30 @@ class Controller(QObject):
             self._worker.cancel = True
             self._thread.quit()
             self._thread.wait(10000)
+        self.settings["history"] = []          # history is only for this session
         self.settings.save()
         self.display.close()
 
     # ================================================================ import / files
     @Slot()
-    def importBibles(self):
-        start = self.settings.data.get("legacy_dir") or str(Path.home() / "Documents")
-        folder = QFileDialog.getExistingDirectory(
-            None, "Import Bible Version — select the folder that contains the Bibles folder", start)
-        if not folder:
+    def importVersionFiles(self):
+        """Settings › Import Bible version: add one or more .sqlite / .db3 Bible files."""
+        if self._import.get("running"):
             return
-        self.settings["legacy_dir"] = folder
+        start = self.settings.data.get("import_dir") or str(Path.home() / "Documents")
+        files, _ = QFileDialog.getOpenFileNames(
+            None, "Import Bible Version", start, "Bible versions (*.sqlite *.db3);;All files (*)")
+        if not files:
+            return
+        self.settings["import_dir"] = str(Path(files[0]).parent)
         self._save()
+        self._start_import(ImportWorker([Path(f) for f in files], self.library.data_dir))
+
+    def _start_import(self, worker: ImportWorker):
         self._import = {"running": True, "value": 0, "total": 0, "text": "Starting import…"}
         self.importChanged.emit()
         self._thread = QThread(self)
-        self._worker = ImportWorker(Path(folder), self.library.data_dir)
+        self._worker = worker
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._import_progress)       # QObject slots -> UI thread
@@ -526,9 +568,14 @@ class Controller(QObject):
         self.resolver = BookResolver(self.library)
         if self.version not in self.library.by_code and self.library.versions:
             self.version = "001" if "001" in self.library.by_code else self.library.versions[0].code
-        self._import_end(f"Imported {len(summary['imported'])} Bible versions and "
-                         f"{summary['images']} background images."
-                         + (f" {len(summary['failed'])} failed." if summary["failed"] else ""))
+        n = len(summary["imported"])
+        text = f"Imported {n} Bible version{'' if n == 1 else 's'}"
+        text += f" and {summary['images']} background images." if summary.get("images") else "."
+        if summary.get("skipped"):
+            text += f" {len(summary['skipped'])} already in the library."
+        if summary["failed"]:
+            text += " Not imported: " + "; ".join(f"{name} ({why})" for name, why in summary["failed"][:3])
+        self._import_end(text)
         for sig in (self.libraryChanged, self.versionChanged, self.favoritesChanged,
                     self.backgroundsChanged, self.historyChanged):
             sig.emit()
@@ -537,14 +584,3 @@ class Controller(QObject):
     @Slot(str)
     def _import_failed(self, msg):
         self._import_end(f"Import failed: {msg}")
-
-    @Slot()
-    def openDataFolder(self):
-        p = str(self.library.data_dir)
-        Path(p).mkdir(parents=True, exist_ok=True)
-        if sys.platform.startswith("win"):
-            os.startfile(p)  # noqa: S606
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", p])
-        else:
-            subprocess.Popen(["xdg-open", p])

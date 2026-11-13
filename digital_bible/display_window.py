@@ -6,14 +6,35 @@ borderless / always-on-top. Nothing but the verse is drawn on it.
 """
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence, QPainter
+from PySide6.QtGui import QGuiApplication, QPainter
 from PySide6.QtWidgets import QMenu, QWidget
 
 from . import APP_NAME
 from .canvas import Renderer, Slide
 
-EDGE = 8  # px grab area for resizing a borderless window
+EDGE = 14  # px grab area at each corner for resizing a borderless window
+
+# Windows messages/hit-test codes used to allow resizing from the 4 corners only,
+# and to keep the window's shape (width and height grow and shrink together)
+WM_NCHITTEST, WM_SIZING, WM_ENTERSIZEMOVE = 0x0084, 0x0214, 0x0231
+HTLEFT, HTRIGHT, HTTOP, HTBOTTOM, HTBORDER = 10, 11, 12, 15, 18
+_SIDE_SIZING = {1, 2, 3, 6}            # WM_SIZING: left, right, top, bottom (not a corner)
+WMSZ_LEFT_SIDE = {1, 4, 7}             # corners whose left edge moves (left, top-left, bottom-left)
+WMSZ_TOP_SIDE = {3, 4, 5}              # corners whose top edge moves (top, top-left, top-right)
+
+
+def keep_shape(w: float, h: float, aspect: float, min_w: float, min_h: float) -> tuple[int, int]:
+    """Size (w, h) changed to the shape `aspect` (= width / height): follows whichever of the two
+    the mouse moved more, and never goes below the minimum size."""
+    if h * aspect >= w:
+        w = h * aspect
+    else:
+        h = w / aspect
+    k = max(1.0, min_w / w, min_h / h)
+    return round(w * k), round(h * k)
 
 
 class DisplayWindow(QWidget):
@@ -23,6 +44,7 @@ class DisplayWindow(QWidget):
     typed = Signal(str)                 # letters typed here are sent to the control window
     state_changed = Signal()            # geometry / mode changed -> save settings
     focus_controls = Signal()
+    reset_size_requested = Signal()
 
     def __init__(self, renderer: Renderer, style: dict, parent=None):
         super().__init__(parent, Qt.Window)
@@ -33,9 +55,11 @@ class DisplayWindow(QWidget):
         self.renderer = renderer
         self.style_ = style
         self.slide = Slide()
-        self._frameless = False
+        self._frameless = True              # the verse window never has a title bar or border
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self._on_top = False
         self._normal_geometry: QRect | None = None
+        self._sizing = None                # (aspect, frame_w, frame_h) while a corner is dragged
         self.resize(960, 540)
 
     # ---------------------------------------------------------------- placement
@@ -93,12 +117,6 @@ class DisplayWindow(QWidget):
             self.show()
         self.state_changed.emit()
 
-    def set_frameless(self, on: bool):
-        if on != self._frameless:
-            self._frameless = on
-            if not self.isFullScreen():
-                self._apply_flags()
-
     def set_on_top(self, on: bool):
         if on != self._on_top:
             self._on_top = on
@@ -146,6 +164,30 @@ class DisplayWindow(QWidget):
         """Fullscreen on that monitor (the usual case for a projector)."""
         self.go_fullscreen(screen_name)
 
+    def reset_size(self, img_w: int, img_h: int) -> str:
+        """Make the window a quarter of the screen (half its width and half its height),
+        in the shape of the background image. Returns a short description."""
+        if self.isFullScreen():
+            self.leave_fullscreen()
+        elif self.isMaximized():
+            self.showNormal()
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        sg, avail = scr.geometry(), scr.availableGeometry()
+        box_w, box_h = sg.width() / 2, sg.height() / 2          # a quarter of the screen
+        k = min(box_w / img_w, box_h / img_h)                   # image shape, as big as fits the quarter
+        nw, nh = max(240, round(img_w * k)), max(135, round(img_h * k))
+        fg, g = self.frameGeometry(), self.geometry()
+        fw, fh = max(0, fg.width() - g.width()), max(0, fg.height() - g.height())
+        # keep it where it is, but fully on the screen (borders and title bar included)
+        left, top = g.x() - fg.x(), g.y() - fg.y()
+        right, bottom = fw - left, fh - top
+        x = min(max(g.x(), avail.x() + left), avail.x() + avail.width() - right - nw)
+        y = min(max(g.y(), avail.y() + top), avail.y() + avail.height() - bottom - nh)
+        self.setGeometry(int(x), int(y), nw, nh)
+        self.state_changed.emit()
+        return (f"Verse window set to a quarter of the screen ({nw}×{nh}), "
+                f"in the shape of the background image ({img_w}×{img_h}).")
+
     def windowed_geometry(self) -> QRect:
         if self.isFullScreen() and self._normal_geometry is not None:
             return self._normal_geometry
@@ -176,17 +218,20 @@ class DisplayWindow(QWidget):
     def _edges(self, pos: QPoint):
         if not self._frameless or self.isFullScreen():
             return Qt.Edges()
-        e = Qt.Edges()
+        h = Qt.Edges()
+        v = Qt.Edges()
         r = self.rect()
         if pos.x() <= EDGE:
-            e |= Qt.LeftEdge
-        if pos.x() >= r.width() - EDGE:
-            e |= Qt.RightEdge
+            h = Qt.LeftEdge
+        elif pos.x() >= r.width() - EDGE:
+            h = Qt.RightEdge
         if pos.y() <= EDGE:
-            e |= Qt.TopEdge
-        if pos.y() >= r.height() - EDGE:
-            e |= Qt.BottomEdge
-        return e
+            v = Qt.TopEdge
+        elif pos.y() >= r.height() - EDGE:
+            v = Qt.BottomEdge
+        if not h or not v:              # only the 4 corners resize (not the sides)
+            return Qt.Edges()
+        return h | v
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton and self._frameless and not self.isFullScreen() and self.windowHandle():
@@ -205,10 +250,6 @@ class DisplayWindow(QWidget):
             self.setCursor(Qt.SizeFDiagCursor)
         elif e in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):
             self.setCursor(Qt.SizeBDiagCursor)
-        elif e & (Qt.LeftEdge | Qt.RightEdge):
-            self.setCursor(Qt.SizeHorCursor)
-        elif e & (Qt.TopEdge | Qt.BottomEdge):
-            self.setCursor(Qt.SizeVerCursor)
         else:
             self.unsetCursor()
         super().mouseMoveEvent(ev)
@@ -227,10 +268,7 @@ class DisplayWindow(QWidget):
         top.setCheckable(True)
         top.setChecked(self._on_top)
         top.toggled.connect(self.set_on_top)
-        fl = m.addAction("Borderless window")
-        fl.setCheckable(True)
-        fl.setChecked(self._frameless)
-        fl.toggled.connect(self.set_frameless)
+        m.addAction("Reset size (quarter of the screen)").triggered.connect(self.reset_size_requested.emit)
         m.addSeparator()
         m.addAction("Next verse  (→)").triggered.connect(self.next_requested.emit)
         m.addAction("Previous verse  (←)").triggered.connect(self.prev_requested.emit)
@@ -239,6 +277,57 @@ class DisplayWindow(QWidget):
         m.addAction("Show controls").triggered.connect(self.focus_controls.emit)
         m.addAction("Hide display").triggered.connect(self.hide)
         m.exec(ev.globalPos())
+
+    def nativeEvent(self, event_type, message):
+        """Windows: the sides don't resize, only the 4 corners, and a corner drag keeps the
+        window's shape - width and height change together (diagonal resizing only)."""
+        if sys.platform == "win32" and not self.isFullScreen():
+            try:
+                import ctypes
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                user32 = ctypes.windll.user32
+                if msg.message == WM_NCHITTEST and not self._frameless:
+                    user32.DefWindowProcW.restype = ctypes.c_ssize_t
+                    user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                    hit = user32.DefWindowProcW(msg.hWnd, msg.message, msg.wParam, msg.lParam)
+                    if hit in (HTLEFT, HTRIGHT, HTTOP, HTBOTTOM):
+                        return True, HTBORDER          # a side: no resize cursor, no resizing
+                    return True, int(hit)
+                if msg.message == WM_ENTERSIZEMOVE:
+                    # remember the shape (client area) and the border size when a drag starts
+                    cr, wr = wintypes.RECT(), wintypes.RECT()
+                    user32.GetClientRect(msg.hWnd, ctypes.byref(cr))
+                    user32.GetWindowRect(msg.hWnd, ctypes.byref(wr))
+                    cw, ch = cr.right - cr.left, cr.bottom - cr.top
+                    if cw > 0 and ch > 0:
+                        self._sizing = (cw / ch, (wr.right - wr.left) - cw, (wr.bottom - wr.top) - ch)
+                if msg.message == WM_SIZING:
+                    r = wintypes.RECT.from_address(int(msg.lParam))
+                    side = int(msg.wParam)
+                    if side in _SIDE_SIZING or self._sizing is None:
+                        # (e.g. keyboard sizing from the window menu) keep the current size
+                        cur = wintypes.RECT()
+                        user32.GetWindowRect(msg.hWnd, ctypes.byref(cur))
+                        r.left, r.top, r.right, r.bottom = cur.left, cur.top, cur.right, cur.bottom
+                        return True, 1
+                    aspect, fw, fh = self._sizing
+                    dpr = self.devicePixelRatioF() or 1.0
+                    w, h = keep_shape(r.right - r.left - fw, r.bottom - r.top - fh, aspect,
+                                      self.minimumWidth() * dpr, self.minimumHeight() * dpr)
+                    W, H = w + fw, h + fh
+                    if side in WMSZ_LEFT_SIDE:
+                        r.left = r.right - W
+                    else:
+                        r.right = r.left + W
+                    if side in WMSZ_TOP_SIDE:
+                        r.top = r.bottom - H
+                    else:
+                        r.bottom = r.top + H
+                    return True, 1
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
 
     def moveEvent(self, ev):
         super().moveEvent(ev)

@@ -6,10 +6,10 @@ AbstractButton {
     id: control
     property color swatch: "white"
     hoverEnabled: true
-    implicitWidth: 44
-    implicitHeight: 26
+    implicitWidth: Theme.s(44)
+    implicitHeight: Theme.s(26)
     background: Rectangle {
-        radius: 6
+        radius: Theme.s(6)
         color: control.swatch
         border.width: control.hovered ? 2 : 1
         border.color: control.hovered ? Theme.accent : Theme.borderStrong

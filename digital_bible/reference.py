@@ -118,19 +118,6 @@ class BookResolver:
         eng = [b for b in sorted(cands) if norm(ENGLISH_BOOKS[b - 1]).startswith(key)]
         return (eng or sorted(cands))[0]
 
-    def completions(self, version_code: Optional[str]) -> list[str]:
-        names = []
-        if version_code in self.library.by_code:
-            v = self.library.by_code[version_code]
-            names += [v.book_name(b).title() for b in range(1, 67)]
-        names += ENGLISH_BOOKS
-        seen, out = set(), []
-        for n in names:
-            if n.lower() not in seen:
-                seen.add(n.lower())
-                out.append(n)
-        return out
-
     def parse(self, text: str, current: Optional[Ref] = None, version_code: Optional[str] = None) -> Ref:
         text = text.strip()
         if not text:

@@ -1,4 +1,4 @@
-"""AI Mode backend for BiblePro.
+"""AI Mode backend for BibleQ-AI.
 
 Layers (each usable on its own, none of them touches the original Bible files):
 

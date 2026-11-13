@@ -3,11 +3,14 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "../components"
 
-// AI Mode: Bible research chat + settings (index, embedding model, search, API key).
+// AI Mode. One file, two uses: view 0 = the chat (AI Mode tab),
+// view 1 = AI Mode settings (Settings › AI Mode Settings).
 Item {
     id: root
     objectName: "aiPage"
-    property int view: 0                       // 0 = chat, 1 = settings
+    property int view: 0                       // 0 = chat, 1 = settings (fixed per use)
+    Component.onCompleted: if (view === 1) aiCtrl.refreshLog()
+    onVisibleChanged: if (visible && view === 1) aiCtrl.refreshLog()
     readonly property var st: aiCtrl.indexStatus
     readonly property var prog: aiCtrl.progress
 
@@ -29,50 +32,24 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        spacing: Theme.s(10)
 
-        // ---------- top bar: view switch + index state
+        // ---------- top bar: index state (settings only)
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
-            Rectangle {
-                implicitWidth: seg.implicitWidth + 6
-                implicitHeight: 34
-                radius: 8
-                color: Theme.surfaceAlt
-                border.color: Theme.border
-                Row {
-                    id: seg
-                    anchors.centerIn: parent
-                    spacing: 2
-                    Repeater {
-                        model: ["Chat", "Settings"]
-                        delegate: AbstractButton {
-                            required property string modelData
-                            required property int index
-                            width: 92; height: 28
-                            onClicked: { root.view = index; if (index === 1) aiCtrl.refreshLog() }
-                            background: Rectangle { radius: 6; color: root.view === index ? Theme.surface : "transparent"
-                                border.color: root.view === index ? Theme.border : "transparent" }
-                            contentItem: Text { text: modelData; font.family: Theme.font; font.pixelSize: Theme.fontSize
-                                font.weight: root.view === index ? Font.DemiBold : Font.Normal
-                                color: root.view === index ? Theme.text : Theme.textMuted
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        }
-                    }
-                }
-            }
+            visible: root.view === 1
+            spacing: Theme.s(8)
             Item { Layout.fillWidth: true }
             Rectangle {
-                radius: 11
-                implicitHeight: 22
+                radius: Theme.s(11)
+                implicitHeight: Theme.s(22)
                 implicitWidth: stateText.implicitWidth + 18
                 color: root.st.state === "ready" ? Theme.successSoft : root.st.state === "error" ? Theme.dangerSoft : Theme.warningSoft
                 Text {
                     id: stateText
                     anchors.centerIn: parent
                     text: "Index: " + (root.st.state || "…") + (root.st.selected_versions ? "  ·  " + root.st.selected_versions.join(", ") : "")
-                    font.family: Theme.font; font.pixelSize: 11; font.weight: Font.DemiBold
+                    font.family: Theme.font; font.pixelSize: Theme.s(11); font.weight: Font.DemiBold
                     color: root.st.state === "ready" ? Theme.success : root.st.state === "error" ? Theme.danger : Theme.warning
                 }
             }
@@ -83,17 +60,17 @@ Item {
             Layout.fillWidth: true
             visible: root.prog.running
             implicitHeight: progCol.implicitHeight + 16
-            radius: 8
+            radius: Theme.s(8)
             color: Theme.accentSoft
             border.color: "#C7D7FE"
             ColumnLayout {
                 id: progCol
                 anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
+                anchors.margins: Theme.s(8)
+                spacing: Theme.s(6)
                 RowLayout {
                     Layout.fillWidth: true
-                    BusyIndicator { running: root.prog.running; implicitWidth: 22; implicitHeight: 22 }
+                    BusyIndicator { running: root.prog.running; implicitWidth: Theme.s(22); implicitHeight: Theme.s(22) }
                     Body { Layout.fillWidth: true; text: root.prog.message; elide: Text.ElideRight; wrapMode: Text.NoWrap }
                     AppButton { text: "Cancel"; compact: true; onClicked: aiCtrl.cancelIndex() }
                 }
@@ -113,17 +90,17 @@ Item {
 
             // =========================================================== CHAT
             Item {
-                ChatPanel {
-                    id: chatPanel
+                Loader {
                     anchors.fill: parent
+                    active: root.view === 0
                     visible: !aiCtrl.chatPoppedOut
-                    onPopOutRequested: aiCtrl.setChatPoppedOut(true)
+                    sourceComponent: ChatPanel { onPopOutRequested: aiCtrl.setChatPoppedOut(true) }
                 }
                 ColumnLayout {
                     anchors.centerIn: parent
                     width: Math.min(parent.width - 40, 440)
                     visible: aiCtrl.chatPoppedOut
-                    spacing: 12
+                    spacing: Theme.s(12)
                     Text {
                         Layout.alignment: Qt.AlignHCenter
                         text: "The chat is open in its own window"
@@ -133,7 +110,7 @@ Item {
                     Small {
                         Layout.fillWidth: true
                         horizontalAlignment: Text.AlignHCenter
-                        text: "It sits to the right of BiblePro and follows it when you move or resize this window."
+                        text: "It sits to the right of BibleQ-AI and follows it when you move or resize this window."
                     }
                     AppButton {
                         Layout.alignment: Qt.AlignHCenter
@@ -151,41 +128,41 @@ Item {
                 contentWidth: availableWidth
                 ColumnLayout {
                     width: settingsView.availableWidth
-                    spacing: 22
+                    spacing: Theme.s(22)
 
                     // ---- missing packages
                     Rectangle {
                         Layout.fillWidth: true
                         visible: aiCtrl.packages.missing.length > 0
                         implicitHeight: pkgCol.implicitHeight + 20
-                        radius: 8
+                        radius: Theme.s(8)
                         color: Theme.warningSoft
                         border.color: "#FDE68A"
                         ColumnLayout {
                             id: pkgCol
                             anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 4
-                            Body { text: aiCtrl.packages.frozen ? "BiblePro.exe searches by keywords only"
+                            anchors.margins: Theme.s(10)
+                            spacing: Theme.s(4)
+                            Body { text: aiCtrl.packages.frozen ? "BibleQ-AI.exe searches by keywords only"
                                                                 : "Some AI components are not installed: " + aiCtrl.packages.missing.join(", ")
                                    font.weight: Font.DemiBold; color: Theme.warning; Layout.fillWidth: true }
                             Small { Layout.fillWidth: true
                                     text: aiCtrl.packages.frozen
-                                          ? "To keep the .exe small, it doesn't include the meaning-based search (PyTorch, bge-m3, ChromaDB). Gemini answers still work. For meaning-based search, start BiblePro with run.bat."
-                                          : "In the BiblePro folder run:   .venv\\Scripts\\python -m pip install -r requirements-ai.txt   then restart BiblePro." }
+                                          ? "To keep the .exe small, it doesn't include the meaning-based search (PyTorch, bge-m3, ChromaDB). Gemini answers still work. For meaning-based search, start BibleQ-AI with run.bat."
+                                          : "In the BibleQ-AI folder run:   .venv\\Scripts\\python -m pip install -r requirements-ai.txt   then restart BibleQ-AI." }
                         }
                     }
 
                     // ---- index status
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: Theme.s(10)
                         SectionLabel { text: "Bible index" }
                         GridLayout {
                             Layout.fillWidth: true
                             columns: width > 520 ? 4 : 2
-                            columnSpacing: 10
-                            rowSpacing: 10
+                            columnSpacing: Theme.s(10)
+                            rowSpacing: Theme.s(10)
                             Repeater {
                                 model: [
                                     ["Databases found", root.st.databases_found],
@@ -200,16 +177,16 @@ Item {
                                 delegate: Rectangle {
                                     required property var modelData
                                     Layout.fillWidth: true
-                                    implicitHeight: 58
-                                    radius: 8
+                                    implicitHeight: Theme.s(58)
+                                    radius: Theme.s(8)
                                     color: Theme.surfaceAlt
                                     border.color: Theme.border
                                     Column {
                                         anchors.verticalCenter: parent.verticalCenter
                                         x: 12
-                                        spacing: 2
+                                        spacing: Theme.s(2)
                                         Small { text: modelData[0] }
-                                        Text { text: String(modelData[1] === undefined ? "–" : modelData[1]); font.family: Theme.font; font.pixelSize: 15; font.weight: Font.DemiBold; color: Theme.text }
+                                        Text { text: String(modelData[1] === undefined ? "–" : modelData[1]); font.family: Theme.font; font.pixelSize: Theme.s(15); font.weight: Font.DemiBold; color: Theme.text }
                                     }
                                 }
                             }
@@ -223,7 +200,7 @@ Item {
                         }
                         Flow {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: Theme.s(8)
                             AppButton { text: "Scan Bible Databases"; enabled: !root.prog.running; onClicked: aiCtrl.scanDatabases() }
                             AppButton { text: "Build Index"; variant: "primary"; enabled: !root.prog.running; onClicked: aiCtrl.buildIndex() }
                             AppButton { text: "Refresh Index"; enabled: !root.prog.running; onClicked: aiCtrl.buildIndex()
@@ -238,25 +215,25 @@ Item {
                     // ---- which Bibles
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 8
+                        spacing: Theme.s(8)
                         SectionLabel { text: "Bibles used by AI Mode" }
                         Small { Layout.fillWidth: true; text: "Checked versions are indexed for AI search. To add another version, type its name below or click Show all. Comparing a verse still works across all versions." }
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: Theme.s(8)
                             AppTextField { id: vFilter; Layout.fillWidth: true; placeholderText: "Find a version to add (e.g. NIV, Spanish)…" }
                             AppButton { id: vShowAll; text: checked ? "Show checked only" : "Show all"; checkable: true; compact: true }
                         }
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(44, Math.min(220, vList.contentHeight + 8))
-                            radius: 8
+                            radius: Theme.s(8)
                             color: Theme.surface
                             border.color: Theme.border
                             ListView {
                                 id: vList
                                 anchors.fill: parent
-                                anchors.margins: 4
+                                anchors.margins: Theme.s(4)
                                 clip: true
                                 ScrollBar.vertical: ScrollBar {}
                                 // only checked versions, unless searching or "Show all"
@@ -285,23 +262,29 @@ Item {
                     // ---- embedding model
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 8
+                        spacing: Theme.s(8)
                         SectionLabel { text: "Embedding model (runs locally)" }
                         Small { Layout.fillWidth: true; text: "Turns verses and questions into vectors for meaning-based search. Runs on this computer — no API costs." }
+                        Small {
+                            Layout.fillWidth: true
+                            visible: aiCtrl.warmup.message !== ""
+                            text: aiCtrl.warmup.message
+                            color: aiCtrl.warmup.state === "error" ? Theme.danger : Theme.textFaint
+                        }
                         Repeater {
                             model: aiCtrl.embedding.models
                             delegate: Rectangle {
                                 required property var modelData
                                 Layout.fillWidth: true
                                 implicitHeight: embRow.implicitHeight + 20
-                                radius: 8
+                                radius: Theme.s(8)
                                 color: modelData.current ? Theme.accentSoft : Theme.surface
                                 border.color: modelData.current ? "#C7D7FE" : Theme.border
                                 RowLayout {
                                     id: embRow
                                     anchors.fill: parent
-                                    anchors.margins: 10
-                                    spacing: 10
+                                    anchors.margins: Theme.s(10)
+                                    spacing: Theme.s(10)
                                     ColumnLayout {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
@@ -322,12 +305,24 @@ Item {
                     // ---- retrieval
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 8
+                        spacing: Theme.s(8)
                         SectionLabel { text: "Search tuning" }
+                        AppSwitch {
+                            text: "Let Gemini suggest passages to look up"
+                            checked: aiCtrl.generation.smart_search
+                            enabled: aiCtrl.generation.available
+                            onToggled: aiCtrl.setSmartSearch(checked)
+                        }
+                        Small {
+                            Layout.fillWidth: true
+                            text: "Before searching, Gemini names the passages a Bible teacher would look up (for example Matthew 27:51-53 for "
+                                  + "“who rose from the dead when Jesus died?”) and rewrites follow-up questions so they make sense on their own. "
+                                  + "The verses are then read from your own Bibles. Much better answers; adds about a second."
+                        }
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 3
-                            columnSpacing: 12
+                            columnSpacing: Theme.s(12)
                             Body { text: "Verses per answer" }
                             SpinBox { from: 3; to: 40; value: aiCtrl.retrieval.final_k; onValueModified: aiCtrl.setRetrieval("final_k", value) }
                             Item { Layout.fillWidth: true }
@@ -347,12 +342,12 @@ Item {
                         id: geminiSec
                         objectName: "geminiSection"
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: Theme.s(10)
                         property bool unlocked: false
                         readonly property var g: aiCtrl.generation
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: Theme.s(8)
                             SectionLabel { text: "AI answers — Google Gemini"; Layout.fillWidth: true }
                             Text {
                                 text: geminiSec.unlocked ? "🔓 Editing" : "🔒 Locked"
@@ -375,10 +370,10 @@ Item {
 
                         // status pill
                         RowLayout {
-                            spacing: 8
+                            spacing: Theme.s(8)
                             Rectangle {
-                                radius: 11
-                                implicitHeight: 22
+                                radius: Theme.s(11)
+                                implicitHeight: Theme.s(22)
                                 implicitWidth: pillText.implicitWidth + 18
                                 color: geminiSec.g.available ? Theme.successSoft : Theme.warningSoft
                                 Text {
@@ -386,7 +381,7 @@ Item {
                                     anchors.centerIn: parent
                                     text: geminiSec.g.available ? (geminiSec.g.enabled ? "Ready" : "Ready · answers turned off")
                                                                 : !aiCtrl.apiKey.set ? "No API key" : "Not available"
-                                    font.family: Theme.font; font.pixelSize: 11; font.weight: Font.DemiBold
+                                    font.family: Theme.font; font.pixelSize: Theme.s(11); font.weight: Font.DemiBold
                                     color: geminiSec.g.available ? Theme.success : Theme.warning
                                 }
                             }
@@ -402,12 +397,12 @@ Item {
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 2
-                            columnSpacing: 10
-                            rowSpacing: 8
+                            columnSpacing: Theme.s(10)
+                            rowSpacing: Theme.s(8)
                             Body { text: "Model" }
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 8
+                                spacing: Theme.s(8)
                                 AppComboBox {
                                     id: modelBox
                                     Layout.fillWidth: true
@@ -442,7 +437,7 @@ Item {
                         // API key
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: Theme.s(8)
                             Body { text: "API key" }
                             AppTextField {
                                 id: keyField
@@ -463,19 +458,19 @@ Item {
                                 onClicked: clearKeyDlg.open() }
                         }
                         Small { Layout.fillWidth: true
-                            text: aiCtrl.apiKey.available ? "Keys are stored in Windows Credential Manager, never in BiblePro's files. Get a key at aistudio.google.com."
+                            text: aiCtrl.apiKey.available ? "Keys are stored in Windows Credential Manager, never in BibleQ-AI's files. Get a key at aistudio.google.com."
                                                           : "Secure key storage is not available (install the AI components)." }
 
                         // test
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 10
+                            spacing: Theme.s(10)
                             AppButton {
                                 text: geminiSec.g.busy === "test" ? "Testing…" : "Test Connection"
                                 enabled: aiCtrl.apiKey.set && geminiSec.g.busy === ""
                                 onClicked: aiCtrl.testConnection()
                             }
-                            BusyIndicator { visible: geminiSec.g.busy !== ""; running: visible; implicitWidth: 24; implicitHeight: 24 }
+                            BusyIndicator { visible: geminiSec.g.busy !== ""; running: visible; implicitWidth: Theme.s(24); implicitHeight: Theme.s(24) }
                             Small {
                                 Layout.fillWidth: true
                                 visible: geminiSec.g.result && geminiSec.g.result.message !== undefined
@@ -484,7 +479,7 @@ Item {
                             }
                         }
                     }
-                    Item { Layout.preferredHeight: 8 }
+                    Item { Layout.preferredHeight: Theme.s(8) }
                 }
             }
         }
@@ -497,10 +492,10 @@ Item {
         function show(m) { msg = m; opacity = 1; noticeTimer.restart() }
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 64
+        anchors.bottomMargin: Theme.s(64)
         width: Math.min(parent.width - 20, noticeText.implicitWidth + 32)
         height: noticeText.implicitHeight + 18
-        radius: 10
+        radius: Theme.s(10)
         color: "#1E293B"
         opacity: 0
         visible: opacity > 0
@@ -518,7 +513,8 @@ Item {
         title: "Rebuild the index?"
         standardButtons: Dialog.Yes | Dialog.Cancel
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
-        Body { width: 380; text: "This deletes the existing vectors and embeds every selected Bible again. It can take a while. Your Bible files are not touched." }
+        width: Theme.s(380) + leftPadding + rightPadding
+        Body { width: Theme.s(380); text: "This deletes the existing vectors and embeds every selected Bible again. It can take a while. Your Bible files are not touched." }
         onAccepted: aiCtrl.rebuildIndex()
     }
     Dialog {
@@ -530,7 +526,8 @@ Item {
         title: "Change embedding model?"
         standardButtons: Dialog.Yes | Dialog.Cancel
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
-        Body { width: 400; text: "Vectors from different models can't be mixed, so the index must be built again for “" + switchDlg.modelId + "”. The current model's index is kept in case you switch back." }
+        width: Theme.s(400) + leftPadding + rightPadding
+        Body { width: Theme.s(400); text: "Vectors from different models can't be mixed, so the index must be built again for “" + switchDlg.modelId + "”. The current model's index is kept in case you switch back." }
         onAccepted: aiCtrl.setEmbeddingModel(modelId)
     }
     Dialog {
@@ -545,7 +542,7 @@ Item {
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
         ScrollView {
             anchors.fill: parent
-            TextArea { readOnly: true; text: aiCtrl.indexLog; font.family: "Consolas"; font.pixelSize: 12; wrapMode: TextArea.NoWrap }
+            TextArea { readOnly: true; text: aiCtrl.indexLog; font.family: "Consolas"; font.pixelSize: Theme.s(12); wrapMode: TextArea.NoWrap }
         }
     }
     Dialog {
@@ -566,16 +563,16 @@ Item {
             delegate: RowLayout {
                 required property var modelData
                 width: ListView.view.width
-                spacing: 10
-                Small { text: modelData.file; Layout.preferredWidth: 90; wrapMode: Text.NoWrap }
-                Small { text: modelData.abbr; Layout.preferredWidth: 80; color: Theme.accent; wrapMode: Text.NoWrap }
+                spacing: Theme.s(10)
+                Small { text: modelData.file; Layout.preferredWidth: Theme.s(90); wrapMode: Text.NoWrap }
+                Small { text: modelData.abbr; Layout.preferredWidth: Theme.s(80); color: Theme.accent; wrapMode: Text.NoWrap }
                 Small { text: modelData.translation; Layout.fillWidth: true; elide: Text.ElideRight; wrapMode: Text.NoWrap; color: Theme.text }
-                Small { text: modelData.language + " (" + modelData.lang_code + ")"; Layout.preferredWidth: 140; wrapMode: Text.NoWrap }
+                Small { text: modelData.language + " (" + modelData.lang_code + ")"; Layout.preferredWidth: Theme.s(140); wrapMode: Text.NoWrap }
                 Small { text: modelData.error ? "error: " + modelData.error
                               : modelData.indexed ? "indexed · " + modelData.verses + " verses"
                               : modelData.selected ? "selected, not indexed" : "—"
                         color: modelData.error ? Theme.danger : modelData.indexed ? Theme.success : Theme.textMuted
-                        Layout.preferredWidth: 170; wrapMode: Text.NoWrap }
+                        Layout.preferredWidth: Theme.s(170); wrapMode: Text.NoWrap }
             }
         }
     }
@@ -587,7 +584,8 @@ Item {
         title: "Remove the Gemini API key?"
         standardButtons: Dialog.Yes | Dialog.Cancel
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
-        Body { width: 380; text: "The key will be deleted from Windows Credential Manager. AI Mode will show Bible passages only until you add a key again." }
+        width: Theme.s(380) + leftPadding + rightPadding
+        Body { width: Theme.s(380); text: "The key will be deleted from Windows Credential Manager. AI Mode will show Bible passages only until you add a key again." }
         onAccepted: aiCtrl.clearApiKey()
     }
 }

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, QRectF, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtQml import QmlElement
 from PySide6.QtQuick import QQuickPaintedItem
 
-QML_IMPORT_NAME = "BiblePro.Native"
+QML_IMPORT_NAME = "BibleQ.Native"
 QML_IMPORT_MAJOR_VERSION = 1
 
 
@@ -46,6 +46,12 @@ class SlidePreview(QQuickPaintedItem):
         w = min(r.width(), r.height() * aspect)
         h = w / aspect
         target = QRectF((r.width() - w) / 2, (r.height() - h) / 2, w, h)
+        radius = max(6.0, min(14.0, w / 60))         # rounded corners like the cards
+        clip = QPainterPath()
+        clip.addRoundedRect(target, radius, radius)
+        p.save()
+        p.setClipPath(clip)
         self._ctrl.renderer.paint(p, target, self._ctrl.visible_slide(), self._ctrl.settings.style)
+        p.restore()
         p.setPen(QColor(0, 0, 0, 40))
-        p.drawRect(target.adjusted(0, 0, -1, -1))
+        p.drawRoundedRect(target.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)

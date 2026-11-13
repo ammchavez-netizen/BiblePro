@@ -17,18 +17,18 @@ ScrollView {
 
     ColumnLayout {
         width: root.availableWidth
-        spacing: 18
+        spacing: Theme.s(18)
 
         // ---- text
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             SectionLabel { text: "Text" }
             GridLayout {
                 Layout.fillWidth: true
                 columns: 4
-                columnSpacing: 12
-                rowSpacing: 10
+                columnSpacing: Theme.s(12)
+                rowSpacing: Theme.s(10)
                 Label_ { text: "Font" }
                 AppComboBox {
                     id: fontBox
@@ -58,7 +58,7 @@ ScrollView {
                 }
                 Label_ { text: "Align" }
                 AppComboBox {
-                    Layout.preferredWidth: 140
+                    Layout.preferredWidth: Theme.s(140)
                     model: ["Center", "Left"]
                     currentIndex: root.st.align === "left" ? 1 : 0
                     onActivated: ctrl.setStyleValue("align", currentIndex === 1 ? "left" : "center")
@@ -71,15 +71,15 @@ ScrollView {
         // ---- colors + label
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             SectionLabel { text: "Colors and top-left label" }
             Flow {
                 Layout.fillWidth: true
-                spacing: 14
-                Row { spacing: 8
+                spacing: Theme.s(14)
+                Row { spacing: Theme.s(8)
                     Label_ { text: "Verse"; anchors.verticalCenter: parent.verticalCenter }
                     ColorSwatch { swatch: root.st.text_color; onClicked: ctrl.pickColor("text_color") } }
-                Row { spacing: 8
+                Row { spacing: Theme.s(8)
                     Label_ { text: "Version name"; anchors.verticalCenter: parent.verticalCenter }
                     ColorSwatch { swatch: root.st.ref_color; onClicked: ctrl.pickColor("ref_color") } }
                 AppSwitch { text: "Show reference"; checked: root.st.show_reference; onToggled: ctrl.setStyleValue("show_reference", checked) }
@@ -90,13 +90,13 @@ ScrollView {
         // ---- background
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             SectionLabel { text: "Background" }
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 12
+                spacing: Theme.s(12)
                 AppComboBox {
-                    Layout.preferredWidth: 150
+                    Layout.preferredWidth: Theme.s(150)
                     model: ["Image", "Solid color"]
                     currentIndex: root.st.bg_mode === "color" ? 1 : 0
                     onActivated: ctrl.setStyleValue("bg_mode", currentIndex === 1 ? "color" : "image")
@@ -113,18 +113,18 @@ ScrollView {
             }
             Flow {
                 Layout.fillWidth: true
-                spacing: 10
+                spacing: Theme.s(10)
                 Repeater {
                     model: ctrl.backgrounds
                     delegate: AbstractButton {
                         id: thumb
                         required property var modelData
-                        width: 132; height: 74
+                        width: Theme.s(132); height: Theme.s(74)
                         hoverEnabled: true
                         onClicked: { ctrl.setStyleValue("bg_mode", "image"); ctrl.setStyleValue("background", modelData.name) }
                         ToolTip.visible: hovered; ToolTip.text: modelData.label; ToolTip.delay: 500
                         background: Rectangle {
-                            radius: 8
+                            radius: Theme.s(8)
                             color: Theme.surfaceAlt
                             border.width: (root.st.background === thumb.modelData.name && root.st.bg_mode === "image") ? 3 : 1
                             border.color: border.width > 1 ? Theme.accent : (thumb.hovered ? Theme.borderStrong : Theme.border)
@@ -140,9 +140,9 @@ ScrollView {
                         }
                     }
                 }
-                AppButton { text: "+ Add image…"; height: 74; onClicked: ctrl.addBackground() }
+                AppButton { text: "+ Add image…"; height: Theme.s(74); onClicked: ctrl.addBackground() }
             }
         }
-        Item { Layout.preferredHeight: 6 }
+        Item { Layout.preferredHeight: Theme.s(6) }
     }
 }

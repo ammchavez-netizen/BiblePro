@@ -1,6 +1,6 @@
 """Detect the language of a question (offline, using the 'lingua' library).
 
-Only languages BiblePro has Bibles for are considered; this keeps detection
+Only languages BibleQ-AI has Bibles for are considered; this keeps detection
 fast, light on memory, and accurate for short questions.
 """
 from __future__ import annotations

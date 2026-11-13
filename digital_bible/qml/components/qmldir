@@ -8,3 +8,7 @@ AppSwitch 1.0 AppSwitch.qml
 AppComboBox 1.0 AppComboBox.qml
 ColorSwatch 1.0 ColorSwatch.qml
 VersionPicker 1.0 VersionPicker.qml
+Icon 1.0 Icon.qml
+NavButton 1.0 NavButton.qml
+PillSwitch 1.0 PillSwitch.qml
+WavyBackground 1.0 WavyBackground.qml

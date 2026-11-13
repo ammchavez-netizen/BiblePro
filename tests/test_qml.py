@@ -86,23 +86,28 @@ def test_ai_tab_settings_and_popout_load_cleanly(qml_app):
     app, engine, messages = qml_app
     ai = app._biblepro[2]
     win = engine.rootObjects()[0]
-    win.findChild(QObject, "tabs").setProperty("currentIndex", 3)
+    win.findChild(QObject, "tabs").setProperty("currentIndex", 2)
     for _ in range(20):
         app.processEvents()
-    page = win.findChild(QObject, "aiPage")
-    page.setProperty("view", 1)
+    assert win.findChild(QObject, "aiPage") is not None          # AI Mode tab: chat only
+    win.setProperty("settingsPage", "ai")                          # Settings › AI Mode Settings
+    win.setProperty("settingsOpen", True)
+    for _ in range(20):
+        app.processEvents()
+    assert win.findChild(QObject, "aiSettingsPage") is not None
     win.findChild(QObject, "geminiSection").setProperty("unlocked", True)
     for _ in range(20):
         app.processEvents()
     ai.setChatPoppedOut(True)
     for _ in range(20):
         app.processEvents()
-    chat = [w for w in app.topLevelWindows() if w.title() == "BiblePro — AI Chat"]
+    chat = [w for w in app.topLevelWindows() if w.title() == "BibleQ-AI — AI Chat"]
     assert chat and chat[0].isVisible()
     assert (chat[0].width(), chat[0].height()) == (win.width(), win.height())
     ai.setChatPoppedOut(False)
     for _ in range(10):
         app.processEvents()
     assert not chat[0].isVisible()
-    page.setProperty("view", 0)
+    win.setProperty("settingsPage", "appearance")
+    win.setProperty("settingsOpen", False)
     assert _qml_errors(messages) == []

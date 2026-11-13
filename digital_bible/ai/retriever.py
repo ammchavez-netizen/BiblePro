@@ -96,7 +96,11 @@ class Retriever:
 
     # ------------------------------------------------------------ main
     def retrieve(self, question: str, lang_code: Optional[str] = None,
-                 codes: Optional[list[str]] = None) -> RetrievalResult:
+                 codes: Optional[list[str]] = None, suggested_refs: Optional[list[str]] = None,
+                 extra_query: str = "") -> RetrievalResult:
+        """suggested_refs: references proposed by Gemini ("Matthew 27:51-53"); they are looked up
+        in the local Bibles and ranked high. extra_query: a standalone rewrite of the question
+        (for follow-ups) that is searched as well."""
         cfg = self.config
         codes = [c for c in (codes or self.indexed_codes) if c in self.library.by_code]
         scores: dict[int, float] = {}
@@ -123,24 +127,45 @@ class Retriever:
         for rank, key in enumerate(ref_keys):
             add(key, 0, "reference", weight=10.0 - rank * 0.01)
 
+        # 1b) passages suggested by Gemini (only those that exist in the Bibles get in)
+        sugg_keys = []
+        if suggested_refs:
+            vt = self.library.text(codes[0] if codes else self.library.versions[0].code)
+            for ref in suggested_refs:
+                for start, end in self.find_references(ref):
+                    k = start
+                    while k is not None and k <= end and len(sugg_keys) < 24:
+                        if k not in sugg_keys and k not in ref_keys:
+                            sugg_keys.append(k)
+                        k = vt.next_key(k)
+        for rank, key in enumerate(sugg_keys):
+            add(key, rank, "suggested", weight=3.0)
+
         # 2) keyword search (without the reference text itself, e.g. "Romans 8:28")
         if self.keyword is not None:
             kw_query = _REF_IN_TEXT.sub(" ", question) if refs else question
             for rank, h in enumerate(self.keyword.search(kw_query, codes, cfg.keyword_k)):
                 add(h.key, rank, "keyword", h.code, h.text)
+            if extra_query and extra_query.strip().lower() != question.strip().lower():
+                for rank, h in enumerate(self.keyword.search(extra_query, codes, cfg.keyword_k // 2)):
+                    add(h.key, rank, "keyword", h.code, h.text, weight=0.7)
 
         # 3) semantic search
         semantic_ok = False
         if self.store is not None and self.embedder is not None:
             try:
-                qv = self.embedder.encode_query(question)
-                hits = self.store.query(qv, cfg.dense_k, codes=codes)
-                semantic_ok = True
-                for rank, h in enumerate(hits):
-                    if h.score < cfg.min_similarity:
-                        continue
-                    add(h.key, rank, "semantic", h.code, h.text, weight=1.0)
-                    similarity[h.key] = max(similarity.get(h.key, 0.0), h.score)
+                queries = [question]
+                if extra_query and extra_query.strip().lower() != question.strip().lower():
+                    queries.append(extra_query)
+                for qi, q in enumerate(queries):
+                    qv = self.embedder.encode_query(q)
+                    hits = self.store.query(qv, cfg.dense_k, codes=codes)
+                    semantic_ok = True
+                    for rank, h in enumerate(hits):
+                        if h.score < cfg.min_similarity:
+                            continue
+                        add(h.key, rank, "semantic", h.code, h.text, weight=1.0 if qi == 0 else 0.8)
+                        similarity[h.key] = max(similarity.get(h.key, 0.0), h.score)
             except (EmbeddingError, VectorStoreError) as exc:
                 notes.append(f"Meaning-based search unavailable: {exc}")
         else:
@@ -163,7 +188,7 @@ class Retriever:
                 reference=self.library.passage(code, key).reference, text=text, score=s,
                 methods=sorted(methods[key]), similarity=similarity.get(key)))
         ranked.sort(key=lambda r: (-("reference" in r.methods), -r.score))
-        limit = max(cfg.final_k, len(ref_keys))
+        limit = min(30, max(cfg.final_k, len(ref_keys) + len(sugg_keys) + 4))
         return RetrievalResult(ranked[:limit], ref_keys, semantic_ok, notes)
 
     def _display_code(self, key, codes, lang_code, found_code):

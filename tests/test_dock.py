@@ -1,4 +1,4 @@
-"""The pop-out chat window docks to the right of BiblePro (or left / same screen if no room)."""
+"""The pop-out chat window docks to the right of BibleQ-AI (or left / same screen if no room)."""
 from PySide6.QtCore import QRect
 
 import digital_bible.qml_ui.ai_controller as mod

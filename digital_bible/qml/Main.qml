@@ -1,29 +1,39 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import BiblePro.Native
+import BibleQ.Native
 import "components"
 import "pages"
 
 ApplicationWindow {
     id: win
-    title: "BiblePro"
-    width: 1240
+    title: "BibleQ-AI"
+    width: 960
     height: 820
     minimumWidth: 720
-    minimumHeight: 560
+    minimumHeight: 600
     visible: true
     color: Theme.bg
     font.family: Theme.font
     font.pixelSize: Theme.fontSize
 
-    readonly property bool wide: width >= 1080
+    // Everything (text, icons, boxes, buttons) grows and shrinks with the window.
+    function updateScale() {
+        var k = Math.max(0.78, Math.min(1.4, Math.min(win.width / 960, win.height / 820)))
+        if (Math.abs(k - Theme.scale) > 0.004) Theme.scale = k
+    }
+    Timer { id: scaleTimer; interval: 30; onTriggered: win.updateScale() }
+    property bool settingsOpen: false            // a Settings page is shown in the bottom card
+    property string settingsPage: "appearance"   // "appearance" | "ai"
+    function openTab(i) { win.settingsOpen = false; tabs.currentIndex = i }
+    function openSettings(page) { win.settingsPage = page; win.settingsOpen = true }
 
     Component.onCompleted: {
         var g = ctrl.windowGeometry()
         if (g.length === 4 && g[2] >= minimumWidth && g[3] >= minimumHeight) {
             x = g[0]; y = g[1]; width = g[2]; height = g[3]
         }
+        updateScale()
         refField.forceActiveFocus()
     }
     onClosing: { aiCtrl.setChatPoppedOut(false); ctrl.saveWindowGeometry(x, y, width, height); ctrl.shutdown() }
@@ -34,13 +44,13 @@ ApplicationWindow {
     function dockChat() { if (chatWin.visible) aiCtrl.dockWindow(chatWin, win) }
     onXChanged: dockTimer.restart()
     onYChanged: dockTimer.restart()
-    onWidthChanged: dockTimer.restart()
-    onHeightChanged: dockTimer.restart()
+    onWidthChanged: { dockTimer.restart(); scaleTimer.restart() }
+    onHeightChanged: { dockTimer.restart(); scaleTimer.restart() }
     Timer { id: dockTimer; interval: 60; onTriggered: win.dockChat() }
 
     Window {
         id: chatWin
-        title: "BiblePro — AI Chat"
+        title: "BibleQ-AI — AI Chat"
         visible: aiCtrl.chatPoppedOut
         color: Theme.bg
         minimumWidth: 420
@@ -50,7 +60,7 @@ ApplicationWindow {
         ChatPanel {
             id: chatPanelPop
             anchors.fill: parent
-            anchors.margins: 16
+            anchors.margins: Theme.s(16)
             popout: true
             onDockRequested: { aiCtrl.setChatPoppedOut(false); win.raise(); win.requestActivate() }
         }
@@ -65,6 +75,7 @@ ApplicationWindow {
             if (ch === "") refField.selectAll()
         }
         function onReferenceChanged() { refField.text = ctrl.referenceText; refField.selectAll() }
+        function onToast(msg) { toast.show(msg) }
         function onImportChanged() { if (!ctrl.importState.running && ctrl.importState.text !== "") toast.show(ctrl.importState.text) }
     }
 
@@ -72,7 +83,7 @@ ApplicationWindow {
     Shortcut { sequences: ["PgDown", "Ctrl+Right", "Alt+Right"]; onActivated: ctrl.next() }
     Shortcut { sequences: ["PgUp", "Ctrl+Left", "Alt+Left"]; onActivated: ctrl.prev() }
     Shortcut { sequence: "Ctrl+K"; onActivated: picker.open() }
-    Shortcut { sequence: "Ctrl+F"; onActivated: { tabs.currentIndex = 0; searchPage.focusSearch() } }
+    Shortcut { sequence: "Ctrl+F"; onActivated: { win.openTab(0); searchPage.focusSearch() } }
     Shortcut { sequences: ["Ctrl+L", "Esc"]; onActivated: { refField.forceActiveFocus(); refField.selectAll() } }
     Shortcut { sequence: "Ctrl+B"; onActivated: ctrl.toggleBlank() }
     Shortcut { sequence: "Ctrl+D"; onActivated: ctrl.setDisplayVisible(!ctrl.displayState.visible) }
@@ -87,253 +98,455 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+8"; onActivated: ctrl.favoriteN(8) }
     Shortcut { sequence: "Ctrl+9"; onActivated: ctrl.favoriteN(9) }
 
-    // ------------------------------------------------------------ header
-    header: Rectangle {
-        height: 56
-        color: Theme.surface
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.border }
-        RowLayout {
+    // ------------------------------------------------------------ background
+    background: Rectangle {
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Theme.bgTop }
+            GradientStop { position: 1.0; color: Theme.bgBottom }
+        }
+    }
+
+    // ------------------------------------------------------------ sidebar
+    readonly property bool compactNav: width < 800
+    Rectangle {
+        id: sidebar
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        width: Theme.s(win.compactNav ? 64 : 156)
+        color: "transparent"
+        WavyBackground { anchors.fill: parent }
+        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: Theme.border }
+
+        ColumnLayout {
             anchors.fill: parent
-            anchors.leftMargin: 18
-            anchors.rightMargin: 12
-            spacing: 10
-            Image { source: iconUrl; sourceSize: Qt.size(30, 30); Layout.preferredWidth: 30; Layout.preferredHeight: 30 }
-            Text {
-                text: "BiblePro"
-                font.family: Theme.font; font.pixelSize: Theme.fontTitle; font.weight: Font.Bold
-                color: Theme.text
+            anchors.margins: Theme.s(12)
+            anchors.topMargin: Theme.s(20)
+            spacing: Theme.s(6)
+
+            // logo + name + version
+            Image {
+                Layout.alignment: Qt.AlignHCenter
+                source: iconUrl
+                sourceSize: Qt.size(Theme.s(win.compactNav ? 40 : 56), Theme.s(win.compactNav ? 40 : 56))
+                Layout.preferredWidth: Theme.s(win.compactNav ? 40 : 56)
+                Layout.preferredHeight: Theme.s(win.compactNav ? 40 : 56)
+                smooth: true
             }
             Text {
+                visible: !win.compactNav
+                Layout.alignment: Qt.AlignHCenter
+                Layout.topMargin: Theme.s(4)
+                text: "BibleQ-AI"
+                font.family: Theme.font; font.pixelSize: Theme.s(18); font.weight: Font.Bold
+                color: Theme.navy
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
                 text: ctrl.about.version
-                font.family: Theme.font; font.pixelSize: Theme.fontSmall
-                color: Theme.textFaint
-                Layout.alignment: Qt.AlignBottom
-                Layout.bottomMargin: 18
+                font.family: Theme.font; font.pixelSize: Theme.s(12)
+                color: Theme.textMuted
             }
-            Item { Layout.fillWidth: true }
+            Item { Layout.preferredHeight: Theme.s(14) }
+
+            Repeater {
+                model: [["Search", "search"], ["History", "history"], ["AI Mode", "sparkle"]]
+                delegate: NavButton {
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    text: modelData[0]
+                    iconName: modelData[1]
+                    compact: win.compactNav
+                    selected: !win.settingsOpen && tabs.currentIndex === index
+                    onClicked: win.openTab(index)
+                }
+            }
+
+            Item { Layout.fillHeight: true }
+
             // import progress
-            RowLayout {
+            ColumnLayout {
                 visible: ctrl.importState.running
-                spacing: 8
-                Text { text: ctrl.importState.text; color: Theme.textMuted; font.pixelSize: Theme.fontSmall; elide: Text.ElideRight; Layout.maximumWidth: 260 }
-                ProgressBar { Layout.preferredWidth: 140; from: 0; to: Math.max(1, ctrl.importState.total); value: ctrl.importState.value }
-                AppButton { text: "Cancel"; compact: true; onClicked: ctrl.cancelImport() }
+                Layout.fillWidth: true
+                spacing: Theme.s(6)
+                Text {
+                    Layout.fillWidth: true
+                    text: ctrl.importState.text
+                    color: Theme.textMuted; font.pixelSize: Theme.fontSmall
+                    wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
+                }
+                ProgressBar { Layout.fillWidth: true; from: 0; to: Math.max(1, ctrl.importState.total); value: ctrl.importState.value }
+                AppButton { text: "Cancel import"; compact: true; onClicked: ctrl.cancelImport() }
             }
-            AppButton { text: "Import Bible Version…"; variant: "ghost"; onClicked: ctrl.importBibles(); enabled: !ctrl.importState.running }
-            AppButton {
-                id: moreBtn
-                text: "⋯"
-                variant: "ghost"
-                implicitWidth: 40
-                font.pixelSize: 18
-                onClicked: moreMenu.popup(moreBtn, 0, moreBtn.height)
+
+            Rectangle { Layout.fillWidth: true; Layout.leftMargin: Theme.s(8); Layout.rightMargin: Theme.s(8); height: 1; color: Theme.border }
+            NavButton {
+                id: settingsBtn
+                Layout.fillWidth: true
+                text: "Settings"
+                iconName: "settings"
+                compact: win.compactNav
+                selected: win.settingsOpen
+                onClicked: settingsMenu.popup(settingsBtn, settingsBtn.width + Theme.s(8),
+                                              settingsBtn.height - settingsMenu.implicitHeight)
                 Menu {
-                    id: moreMenu
-                    MenuItem { text: "Open data folder"; onTriggered: ctrl.openDataFolder() }
+                    id: settingsMenu
+                    MenuItem { text: "Appearance"; onTriggered: win.openSettings("appearance") }
+                    MenuItem { text: "AI Mode Settings"; onTriggered: win.openSettings("ai") }
                     MenuItem { text: "Keyboard shortcuts"; onTriggered: shortcutsDlg.open() }
                     MenuSeparator {}
-                    MenuItem { text: "About BiblePro"; onTriggered: aboutDlg.open() }
+                    MenuItem {
+                        objectName: "importVersionItem"
+                        text: "Import Bible version…"
+                        enabled: !ctrl.importState.running
+                        onTriggered: ctrl.importVersionFiles()
+                    }
                 }
+            }
+            NavButton {
+                Layout.fillWidth: true
+                text: "About"
+                iconName: "info"
+                compact: win.compactNav
+                onClicked: aboutDlg.open()
             }
         }
     }
 
     // ------------------------------------------------------------ body
-    GridLayout {
+    // Compact, stacked: reference entry, "On screen now" (preview | arrows | controls), tabs.
+    ColumnLayout {
         id: body
-        anchors.fill: parent
-        anchors.margins: 16
-        columns: win.wide ? 2 : 1
-        columnSpacing: 16
-        rowSpacing: 16
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.left: sidebar.right
+        anchors.margins: Theme.s(14)
+        spacing: Theme.s(12)
         visible: ctrl.hasLibrary
 
-        // ======== left column: entry, version, preview
-        ColumnLayout {
+        // ======== reference entry + version
+        Card {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.preferredWidth: win.wide ? win.width * 0.47 : -1
-            Layout.maximumWidth: win.wide ? win.width * 0.52 : 100000
-            spacing: 16
-
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredHeight: entryCol.implicitHeight + 32
-                ColumnLayout {
-                    id: entryCol
-                    width: parent.width
-                    spacing: 10
-                    RowLayout {
+            Layout.preferredHeight: entryCol.implicitHeight + 2 * padding
+            padding: Theme.s(12)
+            ColumnLayout {
+                id: entryCol
+                width: parent.width
+                spacing: Theme.s(10)
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s(8)
+                    AppTextField {
+                        id: refField
                         Layout.fillWidth: true
-                        spacing: 8
-                        AppButton {
-                            text: "‹"; font.pixelSize: 28; font.weight: Font.Bold
-                            implicitWidth: 52; implicitHeight: 46
-                            onClicked: ctrl.prev()
-                            ToolTip.visible: hovered; ToolTip.text: "Previous verse (PgUp)"; ToolTip.delay: 500
-                        }
-                        AppTextField {
-                            id: refField
-                            Layout.fillWidth: true
-                            implicitHeight: 46
-                            font.pixelSize: 18
-                            placeholderText: "Type a verse — e.g. Juan 3:16, jn 3:16-18, 1 pe 5:7"
-                            onAccepted: ctrl.go(text)
-                        }
-                        AppButton {
-                            text: "›"; font.pixelSize: 28; font.weight: Font.Bold
-                            implicitWidth: 52; implicitHeight: 46
-                            onClicked: ctrl.next()
-                            ToolTip.visible: hovered; ToolTip.text: "Next verse (PgDn)"; ToolTip.delay: 500
-                        }
-                        AppButton { text: "Show"; variant: "primary"; implicitHeight: 46; onClicked: ctrl.go(refField.text) }
+                        Layout.preferredWidth: Theme.s(280)
+                        Layout.maximumWidth: Theme.s(420)
+                        implicitHeight: Theme.s(36)
+                        font.pixelSize: Theme.s(15)
+                        leftPadding: Theme.s(12)
+                        placeholderText: "Type a verse — e.g. jn 3:16"
+                        onAccepted: ctrl.go(text)
+                        ToolTip.visible: hovered && text === ""; ToolTip.delay: 800
+                        ToolTip.text: "Juan 3:16, jn 3:16-18, 1 pe 5:7, Awit 23 … then Enter"
                     }
-                    Text {
-                        visible: ctrl.message !== ""
-                        text: ctrl.message
-                        color: Theme.danger
-                        font.family: Theme.font; font.pixelSize: Theme.fontSmall
+                    AppButton {
+                        text: "Show"
+                        iconName: "search"
+                        variant: "primary"
+                        implicitHeight: Theme.s(36)
+                        leftPadding: Theme.s(16); rightPadding: Theme.s(16)
+                        font.pixelSize: Theme.s(14)
+                        onClicked: ctrl.go(refField.text)
                     }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-                        AbstractButton {
-                            id: versionBtn
-                            Layout.fillWidth: true
-                            implicitHeight: 40
-                            hoverEnabled: true
-                            onClicked: picker.open()
-                            ToolTip.visible: hovered; ToolTip.text: "Change version (Ctrl+K)"; ToolTip.delay: 600
-                            background: Rectangle {
-                                radius: Theme.radiusSmall
-                                color: versionBtn.hovered ? "#F1F5FF" : Theme.accentSoft
-                                border.color: "#C7D7FE"
-                            }
-                            contentItem: RowLayout {
-                                spacing: 10
+                    Item { Layout.fillWidth: true; Layout.minimumWidth: Theme.s(8) }
+                    AbstractButton {
+                        id: versionBtn
+                        implicitHeight: Theme.s(34)
+                        implicitWidth: vRow.implicitWidth + Theme.s(22)
+                        hoverEnabled: true
+                        onClicked: picker.open()
+                        ToolTip.visible: hovered; ToolTip.text: "Change version (Ctrl+K)"; ToolTip.delay: 600
+                        background: Rectangle {
+                            radius: Theme.radiusSmall
+                            color: versionBtn.hovered ? "#F2F6FE" : Theme.surface
+                            border.color: Theme.accentBorder
+                        }
+                        contentItem: Item {
+                            Row {
+                                id: vRow
+                                anchors.centerIn: parent
+                                spacing: Theme.s(8)
                                 Text {
-                                    Layout.leftMargin: 12
+                                    anchors.verticalCenter: parent.verticalCenter
                                     text: ctrl.currentVersion.abbr || "—"
-                                    font.family: Theme.font; font.pixelSize: Theme.fontLarge; font.weight: Font.Bold
+                                    font.family: Theme.font; font.pixelSize: Theme.s(14); font.weight: Font.Bold
                                     color: Theme.accent
                                 }
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: (ctrl.currentVersion.name || "") + "  ·  " + (ctrl.currentVersion.language || "")
-                                          + (ctrl.currentVersion.coverage ? "  ·  " + ctrl.currentVersion.coverage : "")
-                                    font.family: Theme.font; font.pixelSize: Theme.fontSize
-                                    color: Theme.text
-                                    elide: Text.ElideRight
-                                }
-                                Text { Layout.rightMargin: 12; text: "▾"; color: Theme.accent; font.pixelSize: 14 }
+                                Icon { anchors.verticalCenter: parent.verticalCenter; name: "chevron-down"; size: Theme.s(14); strokeWidth: 2.6; color: Theme.accent }
                             }
                         }
                     }
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        Text { text: "Favorites"; color: Theme.textMuted; font.pixelSize: Theme.fontSmall; height: 28; verticalAlignment: Text.AlignVCenter; rightPadding: 4 }
-                        Repeater {
-                            model: ctrl.favorites
-                            delegate: Chip {
-                                required property var modelData
-                                required property int index
-                                text: modelData.abbr
-                                selected: modelData.code === ctrl.currentVersion.code
-                                hint: modelData.name + (index < 9 ? "   (Ctrl+" + (index + 1) + ")" : "")
-                                onClicked: ctrl.setVersion(modelData.code)
-                            }
-                        }
+                    Text {
+                        Layout.maximumWidth: Theme.s(240)
+                        text: (ctrl.currentVersion.name || "") + "  •  " + (ctrl.currentVersion.language || "")
+                        font.family: Theme.font; font.pixelSize: Theme.s(13)
+                        color: Theme.textMuted
+                        elide: Text.ElideRight
+                        ToolTip.visible: vNameHover.hovered && truncated; ToolTip.text: text
+                        HoverHandler { id: vNameHover }
                     }
                 }
-            }
-
-            Card {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 260
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 10
-                    RowLayout {
-                        Layout.fillWidth: true
-                        SectionLabel { text: "On screen now" }
-                        Item { Layout.fillWidth: true }
-                        Text {
-                            text: ctrl.blank ? "Blank" : ctrl.slideInfo.reference
-                            font.family: Theme.font; font.pixelSize: Theme.fontSmall; font.weight: Font.DemiBold
-                            color: ctrl.blank ? Theme.warning : Theme.textMuted
-                        }
+                Text {
+                    visible: ctrl.message !== ""
+                    text: ctrl.message
+                    color: Theme.danger
+                    font.family: Theme.font; font.pixelSize: Theme.fontSmall
+                }
+                Flow {
+                    visible: ctrl.favorites.length > 0
+                    Layout.fillWidth: true
+                    spacing: Theme.s(8)
+                    Text {
+                        height: Theme.s(28)
+                        verticalAlignment: Text.AlignVCenter
+                        text: "Favorites:"
+                        font.family: Theme.font; font.pixelSize: Theme.s(13)
+                        color: Theme.textMuted
                     }
-                    SlidePreview {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.minimumHeight: 120
-                        controller: ctrl
-                    }
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        AppButton {
-                            text: ctrl.displayState.visible ? "Hide display" : "Show display"
-                            onClicked: ctrl.setDisplayVisible(!ctrl.displayState.visible)
+                    Repeater {
+                        model: ctrl.favorites
+                        delegate: Chip {
+                            required property var modelData
+                            required property int index
+                            text: modelData.abbr
+                            selected: modelData.code === ctrl.currentVersion.code
+                            hint: modelData.name + (index < 9 ? "   (Ctrl+" + (index + 1) + ")" : "")
+                            onClicked: ctrl.setVersion(modelData.code)
                         }
-                        AppButton {
-                            id: fsBtn
-                            text: ctrl.displayState.fullscreen ? "Fullscreen ✓ ▾" : "Fullscreen on… ▾"
-                            onClicked: fsMenu.popup(fsBtn, 0, fsBtn.height)
-                            Menu {
-                                id: fsMenu
-                                Repeater {
-                                    model: ctrl.displayState.screens
-                                    delegate: MenuItem {
-                                        required property var modelData
-                                        text: modelData.label
-                                        onTriggered: ctrl.fullscreenOn(modelData.name)
-                                    }
-                                }
-                                MenuSeparator {}
-                                MenuItem { text: "Windowed (not fullscreen)"; onTriggered: ctrl.leaveFullscreen() }
-                            }
-                        }
-                        AppButton {
-                            text: "Blank"
-                            checkable: true
-                            checked: ctrl.blank
-                            onClicked: ctrl.toggleBlank()
-                            ToolTip.visible: hovered; ToolTip.text: "Black screen (Ctrl+B)"; ToolTip.delay: 500
-                        }
-                        AppSwitch { text: "Borderless"; checked: ctrl.displayState.frameless; onToggled: ctrl.setFrameless(checked) }
-                        AppSwitch { text: "Always on top"; checked: ctrl.displayState.onTop; onToggled: ctrl.setOnTop(checked) }
                     }
                 }
             }
         }
 
-        // ======== right column: tabs
+        // ======== on screen now:  preview | ◀ ▶ | display controls
+        Card {
+            id: screenCard
+            Layout.fillWidth: true
+            padding: Theme.s(12)
+            // The preview fills the width left over by the arrows and controls (in the display's
+            // shape), but never takes more than ~45% of the height and never less than the controls.
+            readonly property real previewW: width - 2 * padding - navCol.implicitWidth - ctlCol.width - 3 * screenRow.spacing
+            readonly property real wantH: screenHead.implicitHeight + Theme.s(8) + previewW / Math.max(0.5, ctrl.displayState.aspect || 16 / 9)
+            Layout.preferredHeight: Math.max(ctlCol.implicitHeight + ctlCol.Layout.topMargin,
+                                             Math.min(wantH, (body.height - Theme.s(120)) * (!win.settingsOpen && tabs.currentIndex === 2 ? 0.36 : 0.46)))
+                                    + 2 * padding
+            RowLayout {
+                id: screenRow
+                anchors.fill: parent
+                spacing: Theme.s(12)
+
+                // preview with its header (as wide as the preview itself; any extra room goes
+                // between the arrows and the controls)
+                ColumnLayout {
+                    id: previewCol
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.maximumWidth: Math.max(Theme.s(160), (height - screenHead.implicitHeight - spacing)
+                                                  * Math.max(0.5, ctrl.displayState.aspect || 16 / 9))
+                    spacing: Theme.s(8)
+                    RowLayout {
+                        id: screenHead
+                        Layout.fillWidth: true
+                        spacing: Theme.s(8)
+                        Icon { name: "book"; size: Theme.s(17); color: Theme.accent }
+                        Text {
+                            text: "ON SCREEN NOW"
+                            font.family: Theme.font; font.pixelSize: Theme.s(12); font.weight: Font.DemiBold
+                            font.letterSpacing: 0.4
+                            color: Theme.accent
+                        }
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            implicitHeight: Theme.s(24)
+                            implicitWidth: refPill.implicitWidth + Theme.s(20)
+                            Layout.maximumWidth: Theme.s(220)
+                            radius: height / 2
+                            color: ctrl.blank ? Theme.warningSoft : Theme.accentSoft
+                            border.color: ctrl.blank ? "#FDE68A" : Theme.accentBorder
+                            Text {
+                                id: refPill
+                                anchors.centerIn: parent
+                                width: Math.min(implicitWidth, parent.width - Theme.s(16))
+                                elide: Text.ElideRight
+                                text: ctrl.blank ? "BLANK" : (ctrl.slideInfo.reference || "—").toUpperCase()
+                                font.family: Theme.font; font.pixelSize: Theme.s(12); font.weight: Font.DemiBold
+                                color: ctrl.blank ? Theme.warning : Theme.accent
+                            }
+                        }
+                    }
+                    SlidePreview {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: Theme.s(90)
+                        controller: ctrl
+                    }
+                }
+
+                // next / previous, stacked
+                ColumnLayout {
+                    id: navCol
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.topMargin: screenHead.implicitHeight
+                    spacing: Theme.s(10)
+                    AppButton {
+                        iconName: "next"
+                        implicitWidth: Theme.s(44); implicitHeight: Theme.s(44)
+                        leftPadding: 0; rightPadding: 0
+                        onClicked: ctrl.next()
+                        ToolTip.visible: hovered; ToolTip.text: "Next verse (PgDn)"; ToolTip.delay: 500
+                    }
+                    AppButton {
+                        iconName: "prev"
+                        implicitWidth: Theme.s(44); implicitHeight: Theme.s(44)
+                        leftPadding: 0; rightPadding: 0
+                        onClicked: ctrl.prev()
+                        ToolTip.visible: hovered; ToolTip.text: "Previous verse (PgUp)"; ToolTip.delay: 500
+                    }
+                }
+
+                Item { Layout.fillWidth: true; Layout.preferredWidth: 0 }
+
+                // display controls, one per row: evenly spaced from the top of the preview
+                // to its bottom, labels left-aligned
+                ColumnLayout {
+                    id: ctlCol
+                    Layout.fillWidth: false
+                    Layout.preferredWidth: Theme.s(158)
+                    Layout.maximumWidth: Theme.s(158)
+                    Layout.fillHeight: true
+                    Layout.topMargin: screenHead.implicitHeight + Theme.s(8)
+                    spacing: Theme.s(15)
+                    AppButton {
+                        Layout.fillWidth: true
+                        implicitHeight: Theme.s(30)
+                        compact: true
+                        alignLeft: true
+                        font.pixelSize: Theme.s(12)
+                        iconName: ctrl.displayState.visible ? "eye-off" : "eye"
+                        text: ctrl.displayState.visible ? "Hide display" : "Show display"
+                        onClicked: ctrl.setDisplayVisible(!ctrl.displayState.visible)
+                        ToolTip.visible: hovered; ToolTip.text: "Show or hide the verse window (Ctrl+D)"; ToolTip.delay: 500
+                    }
+                    AppButton {
+                        id: fsBtn
+                        Layout.fillWidth: true
+                        implicitHeight: Theme.s(30)
+                        compact: true
+                        alignLeft: true
+                        font.pixelSize: Theme.s(12)
+                        iconName: "monitor"
+                        text: ctrl.displayState.fullscreen ? "Fullscreen ✓" : "Fullscreen on…"
+                        rightPadding: Theme.s(26)
+                        onClicked: fsMenu.popup(fsBtn, 0, fsBtn.height)
+                        Icon { anchors.right: parent.right; anchors.rightMargin: Theme.s(9); anchors.verticalCenter: parent.verticalCenter
+                               name: "chevron-down"; size: Theme.s(13); strokeWidth: 2.4; color: Theme.text }
+                        Menu {
+                            id: fsMenu
+                            Repeater {
+                                model: ctrl.displayState.screens
+                                delegate: MenuItem {
+                                    required property var modelData
+                                    text: modelData.label
+                                    onTriggered: ctrl.fullscreenOn(modelData.name)
+                                }
+                            }
+                            MenuSeparator {}
+                            MenuItem { text: "Windowed (not fullscreen)"; onTriggered: ctrl.leaveFullscreen() }
+                        }
+                    }
+                    AppButton {
+                        Layout.fillWidth: true
+                        implicitHeight: Theme.s(30)
+                        compact: true
+                        alignLeft: true
+                        font.pixelSize: Theme.s(12)
+                        iconName: "resize"
+                        text: "Reset size"
+                        onClicked: ctrl.resetDisplaySize()
+                        ToolTip.visible: hovered; ToolTip.delay: 500
+                        ToolTip.text: "Reset to Default"
+                    }
+                    AppButton {
+                        Layout.fillWidth: true
+                        implicitHeight: Theme.s(30)
+                        compact: true
+                        alignLeft: true
+                        font.pixelSize: Theme.s(12)
+                        iconName: "square"
+                        text: "Blank"
+                        checkable: true
+                        checked: ctrl.blank
+                        onClicked: ctrl.toggleBlank()
+                        ToolTip.visible: hovered; ToolTip.text: "Black screen (Ctrl+B)"; ToolTip.delay: 500
+                    }
+                    PillSwitch {
+                        Layout.fillWidth: true
+                        implicitHeight: Theme.s(30)
+                        font.pixelSize: Theme.s(12)
+                        text: "Always on top"; checked: ctrl.displayState.onTop; onToggled: ctrl.setOnTop(checked)
+                    }
+					Item { Layout.fillHeight: true } 
+                }
+            }
+        }
+
+        // ======== tabs
         Card {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 320
+            Layout.minimumHeight: Theme.s(200)
             padding: 0
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
+                // Settings header (replaces the tabs while Settings is open)
+                RowLayout {
+                    visible: win.settingsOpen
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.s(18)
+                    Layout.rightMargin: Theme.s(14)
+                    Layout.topMargin: Theme.s(6)
+                    Layout.preferredHeight: Theme.s(48)
+                    spacing: Theme.s(10)
+                    Icon { name: "settings"; size: Theme.s(20); color: Theme.accent }
+                    Text {
+                        text: "Settings  ›  " + (win.settingsPage === "ai" ? "AI Mode Settings" : "Appearance")
+                        font.family: Theme.font; font.pixelSize: Theme.s(16); font.weight: Font.DemiBold
+                        color: Theme.accent
+                    }
+                    Item { Layout.fillWidth: true }
+                    AppButton { text: "Done"; compact: true; variant: "primary"; onClicked: win.settingsOpen = false }
+                }
                 TabBar {
                     id: tabs
                     objectName: "tabs"
+                    visible: !win.settingsOpen
                     Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.topMargin: 6
+                    Layout.leftMargin: Theme.s(14)
+                    Layout.rightMargin: Theme.s(14)
+                    Layout.topMargin: Theme.s(6)
                     background: Item {}
                     Repeater {
-                        model: ["Search", "History", "Appearance", "AI Mode"]
+                        model: ["Search", "History", "AI Mode"]
                         delegate: TabButton {
                             required property string modelData
                             required property int index
                             text: modelData
-                            width: implicitWidth + 16
-                            font.family: Theme.font; font.pixelSize: Theme.fontSize
+                            width: implicitWidth + Theme.s(20)
+                            implicitHeight: Theme.s(38)
+                            font.family: Theme.font; font.pixelSize: Theme.s(14)
                             font.weight: tabs.currentIndex === index ? Font.DemiBold : Font.Normal
                             contentItem: Text {
                                 text: parent.text
@@ -346,26 +559,31 @@ ApplicationWindow {
                                 color: "transparent"
                                 Rectangle {
                                     anchors.bottom: parent.bottom
-                                    width: parent.width; height: 2
+                                    width: parent.width; height: 3; radius: 1.5
                                     color: tabs.currentIndex === index ? Theme.accent : "transparent"
                                 }
                             }
                         }
                     }
                 }
-                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+                Rectangle { Layout.fillWidth: true; Layout.leftMargin: Theme.s(14); Layout.rightMargin: Theme.s(14); height: 1; color: Theme.border }
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.margins: 16
-                    currentIndex: tabs.currentIndex
+                    Layout.margins: Theme.s(14)
+                    currentIndex: win.settingsOpen ? (win.settingsPage === "ai" ? 4 : 3) : tabs.currentIndex
                     SearchPage { id: searchPage }
                     HistoryPage {}
-                    AppearancePage {}
                     Loader {
                         id: aiLoader
-                        active: tabs.currentIndex === 3 || item !== null
-                        source: "pages/AiPage.qml"
+                        active: tabs.currentIndex === 2 || item !== null
+                        sourceComponent: AiPage { view: 0 }
+                    }
+                    AppearancePage {}
+                    Loader {
+                        id: aiSettingsLoader
+                        active: (win.settingsOpen && win.settingsPage === "ai") || item !== null
+                        sourceComponent: AiPage { objectName: "aiSettingsPage"; view: 1 }
                     }
                 }
             }
@@ -375,22 +593,27 @@ ApplicationWindow {
     // ------------------------------------------------------------ first run
     Card {
         visible: !ctrl.hasLibrary
-        anchors.centerIn: parent
-        width: Math.min(520, parent.width - 40)
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: sidebar.width / 2          // centered in the area beside the sidebar
+        width: Math.min(Theme.s(520), parent.width - sidebar.width - 40)
         height: emptyCol.implicitHeight + 48
-        padding: 24
+        padding: Theme.s(24)
         ColumnLayout {
             id: emptyCol
             width: parent.width
-            spacing: 12
-            Text { text: "Welcome to BiblePro"; font.pixelSize: Theme.fontTitle; font.weight: Font.Bold; color: Theme.text }
+            spacing: Theme.s(12)
+            Text { text: "Welcome to BibleQ-AI!"; font.pixelSize: Theme.fontTitle; font.weight: Font.Bold; color: Theme.text }
             Text {
                 Layout.fillWidth: true
+                Layout.topMargin: Theme.s(4)
                 wrapMode: Text.Wrap
                 color: Theme.textMuted
-                text: "No Bibles are installed yet. Import them from the old Digital Bible app: choose the folder that contains its “Bibles” and “Images” folders."
+                font.pixelSize: Theme.s(14)
+                lineHeight: 1.15
+                text: "No Bible versions/translations have been installed yet. To get started, import your Bible database file(s) (SQLite or DB3 format) to begin exploring Scripture."
             }
-            AppButton { text: "Import Bible Version…"; variant: "primary"; onClicked: ctrl.importBibles(); enabled: !ctrl.importState.running }
+            AppButton { objectName: "welcomeImportButton"; Layout.topMargin: Theme.s(6); iconName: "import"; text: "Import Bible Version…"; variant: "primary"; onClicked: ctrl.importVersionFiles(); enabled: !ctrl.importState.running }
         }
     }
 
@@ -413,18 +636,18 @@ ApplicationWindow {
         standardButtons: Dialog.Ok
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
         ColumnLayout {
-            spacing: 6
+            spacing: Theme.s(6)
             RowLayout {
-                spacing: 12
+                spacing: Theme.s(12)
                 Image { source: iconUrl; sourceSize: Qt.size(56, 56) }
                 ColumnLayout {
                     spacing: 0
-                    Text { text: ctrl.about.app; font.pixelSize: 22; font.weight: Font.Bold; color: Theme.text }
+                    Text { text: ctrl.about.app; font.pixelSize: Theme.s(22); font.weight: Font.Bold; color: Theme.text }
                     Text { text: "Version " + ctrl.about.version; color: Theme.textMuted }
                 }
             }
-            Text { text: ctrl.about.description; color: Theme.text; Layout.topMargin: 8; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.maximumWidth: 420 }
-            Text { text: ctrl.about.author; font.weight: Font.DemiBold; color: Theme.text; Layout.topMargin: 8 }
+            Text { text: ctrl.about.description; color: Theme.text; Layout.topMargin: Theme.s(8); wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.maximumWidth: Theme.s(420) }
+            Text { text: ctrl.about.author; font.weight: Font.DemiBold; color: Theme.text; Layout.topMargin: Theme.s(8) }
             Text { text: ctrl.about.locale; color: Theme.text }
             Text {
                 text: "<a href='mailto:" + ctrl.about.email + "'>" + ctrl.about.email + "</a>"
@@ -433,7 +656,7 @@ ApplicationWindow {
                 onLinkActivated: (link) => Qt.openUrlExternally(link)
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
             }
-            Text { text: ctrl.about.versions + " Bible versions installed"; color: Theme.textFaint; Layout.topMargin: 8 }
+            Text { text: ctrl.about.versions + " Bible versions installed"; color: Theme.textFaint; Layout.topMargin: Theme.s(8) }
         }
     }
 
@@ -446,8 +669,8 @@ ApplicationWindow {
         background: Rectangle { radius: Theme.radius; color: Theme.surface; border.color: Theme.border }
         GridLayout {
             columns: 2
-            columnSpacing: 24
-            rowSpacing: 6
+            columnSpacing: Theme.s(24)
+            rowSpacing: Theme.s(6)
             Repeater {
                 model: [
                     ["Enter", "Show the typed reference"], ["PgDn / Ctrl+→", "Next verse"],
@@ -475,10 +698,10 @@ ApplicationWindow {
         function show(m) { msg = m; opacity = 1; toastTimer.restart() }
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 24
+        anchors.bottomMargin: Theme.s(24)
         width: toastText.implicitWidth + 32
-        height: 40
-        radius: 20
+        height: Theme.s(40)
+        radius: Theme.s(20)
         color: "#1E293B"
         opacity: 0
         visible: opacity > 0

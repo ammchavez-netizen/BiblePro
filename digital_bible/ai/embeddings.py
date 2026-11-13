@@ -11,9 +11,10 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
 
@@ -45,15 +46,17 @@ class EmbeddingError(RuntimeError):
     pass
 
 
+_LOAD_LOCK = threading.Lock()          # the warm-up and a question must not load the model twice
+
+
 class Embedder:
     """Lazy wrapper: nothing heavy is imported until the model is first used."""
 
-    def __init__(self, model_id: str, models_dir: Path, device: Optional[str] = None):
+    def __init__(self, model_id: str, models_dir: Path):
         if model_id not in EMBEDDING_MODELS:
             raise EmbeddingError(f"Unknown embedding model: {model_id}")
         self.spec = EMBEDDING_MODELS[model_id]
         self.models_dir = Path(models_dir)
-        self.device = device
         self._model = None
 
     # ------------------------------------------------------------ files
@@ -124,9 +127,18 @@ class Embedder:
         progress("Download complete.")
 
     # ------------------------------------------------------------ encode
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None or self.spec.kind == "hashing"
+
     def load(self):
-        if self._model is not None or self.spec.kind == "hashing":
+        if self.loaded:
             return
+        with _LOAD_LOCK:
+            if self._model is None:
+                self._load()
+
+    def _load(self):
         if not self.is_downloaded():
             raise EmbeddingError(f"{self.spec.model_id} is not downloaded yet.")
         try:
@@ -135,8 +147,12 @@ class Embedder:
             raise EmbeddingError(
                 "Missing packages for local embeddings. Run: pip install -r requirements-ai.txt") from exc
         try:
-            self._model = SentenceTransformer(str(self.local_dir), device=self.device)
-            self._model.max_seq_length = self.spec.max_seq_length
+            try:      # load only from the local folder: no "check for updates" call to Hugging Face
+                model = SentenceTransformer(str(self.local_dir), device="cpu", local_files_only=True)
+            except TypeError:
+                model = SentenceTransformer(str(self.local_dir), device="cpu")
+            model.max_seq_length = self.spec.max_seq_length
+            self._model = model
         except MemoryError as exc:
             raise EmbeddingError("Not enough memory to load the embedding model.") from exc
 

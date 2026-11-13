@@ -7,8 +7,8 @@ import QtQuick.Layouts
 Popup {
     id: root
     signal chosen(string code)
-    width: 620
-    height: 540
+    width: Theme.s(620)
+    height: Theme.s(540)
     modal: true
     focus: true
     padding: 0
@@ -46,8 +46,8 @@ Popup {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 10
+        anchors.margins: Theme.s(14)
+        spacing: Theme.s(10)
 
         Text {
             text: "Choose a Bible version"
@@ -76,7 +76,7 @@ Popup {
             section.criteria: ViewSection.FullString
             section.delegate: Rectangle {
                 width: ListView.view.width
-                height: 30
+                height: Theme.s(30)
                 color: Theme.surface
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
@@ -91,29 +91,29 @@ Popup {
                 required property var modelData
                 required property int index
                 width: ListView.view.width
-                height: 38
-                radius: 6
+                height: Theme.s(38)
+                radius: Theme.s(6)
                 readonly property bool isCurrent: ctrl && modelData.code === ctrl.currentVersion.code
                 color: ListView.isCurrentItem ? Theme.accentSoft : hover.hovered ? "#F8FAFC" : "transparent"
                 HoverHandler { id: hover }
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 4
-                    anchors.rightMargin: 10
-                    spacing: 8
+                    anchors.leftMargin: Theme.s(4)
+                    anchors.rightMargin: Theme.s(10)
+                    spacing: Theme.s(8)
                     AbstractButton {
-                        Layout.preferredWidth: 30; Layout.fillHeight: true
+                        Layout.preferredWidth: Theme.s(30); Layout.fillHeight: true
                         onClicked: ctrl.toggleFavorite(row.modelData.code)
                         contentItem: Text {
                             text: ctrl && ctrl.favoriteCodes.indexOf(row.modelData.code) >= 0 ? "★" : "☆"
                             color: text === "★" ? Theme.gold : Theme.textFaint
-                            font.pixelSize: 17
+                            font.pixelSize: Theme.s(17)
                             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                         }
                         ToolTip.visible: hovered; ToolTip.text: "Add to / remove from favorites"; ToolTip.delay: 600
                     }
                     Text {
-                        Layout.preferredWidth: 92
+                        Layout.preferredWidth: Theme.s(92)
                         text: row.modelData.abbr
                         font.family: Theme.font; font.pixelSize: Theme.fontSize; font.weight: Font.DemiBold
                         color: Theme.accent
@@ -136,7 +136,7 @@ Popup {
                 }
                 MouseArea {
                     anchors.fill: parent
-                    anchors.leftMargin: 34
+                    anchors.leftMargin: Theme.s(34)
                     onClicked: root.pick(row.modelData.code)
                 }
             }

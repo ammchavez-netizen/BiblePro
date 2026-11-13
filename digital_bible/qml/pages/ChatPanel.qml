@@ -10,7 +10,6 @@ Item {
     property bool popout: false          // true inside the pop-out window
     signal popOutRequested()
     signal dockRequested()
-    signal settingsRequested()
     readonly property var st: aiCtrl.indexStatus
     readonly property var prog: aiCtrl.progress
     readonly property var gen: aiCtrl.generation
@@ -30,32 +29,35 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        spacing: Theme.s(10)
 
         // ---- header line: answer source + pop-out
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             Rectangle {
-                width: 8; height: 8; radius: 4
+                width: Theme.s(8); height: Theme.s(8); radius: Theme.s(4)
                 color: root.gen.available && root.gen.enabled ? Theme.success : Theme.textFaint
             }
             Small {
                 Layout.fillWidth: true
                 elide: Text.ElideRight
                 wrapMode: Text.NoWrap
-                text: root.gen.available && root.gen.enabled
-                      ? "AI answers: " + root.gen.model
-                      : "AI answers off — showing Bible passages only"
+                text: (root.gen.available && root.gen.enabled
+                       ? "AI answers: " + root.gen.model
+                       : "AI answers off — showing Bible passages only")
+                      + (aiCtrl.warmup.state === "loading" ? "   ·   Loading the search engine…" : "")
             }
             AppButton {
                 text: root.popout ? "Dock back" : "Pop out ⧉"
                 compact: true
-                variant: "ghost"
+                variant: "soft"
+                implicitHeight: Theme.s(30)
+                font.weight: Font.DemiBold
                 onClicked: root.popout ? root.dockRequested() : root.popOutRequested()
                 ToolTip.visible: hovered; ToolTip.delay: 500
                 ToolTip.text: root.popout ? "Put the chat back into the AI Mode tab"
-                                          : "Open the chat in its own window beside BiblePro"
+                                          : "Open the chat in its own window beside BibleQ-AI"
             }
         }
 
@@ -63,18 +65,18 @@ Item {
             Layout.fillWidth: true
             visible: root.st.state !== "ready" && !root.prog.running
             implicitHeight: bannerRow.implicitHeight + 16
-            radius: 8
+            radius: Theme.s(8)
             color: Theme.warningSoft
             border.color: "#FDE68A"
             RowLayout {
                 id: bannerRow
                 anchors.fill: parent
-                anchors.margins: 8
+                anchors.margins: Theme.s(8)
                 Small {
                     Layout.fillWidth: true
                     color: Theme.warning
                     text: aiCtrl.packages.frozen && !aiCtrl.packages.ok
-                          ? "BiblePro.exe searches by keywords only. For meaning-based search, start BiblePro with run.bat."
+                          ? "BibleQ-AI.exe searches by keywords only. For meaning-based search, start BibleQ-AI with run.bat."
                           : !aiCtrl.packages.ok
                           ? "AI components are not installed, so only keyword search is available. Run:  pip install -r requirements-ai.txt"
                           : "The search index is " + root.st.state + ". Build it once (Settings) for meaning-based search — keyword search works meanwhile."
@@ -88,20 +90,30 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            spacing: 12
-            model: aiCtrl.messages
+            spacing: Theme.s(12)
+            model: aiCtrl.chatModel
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            onCountChanged: Qt.callLater(() => chat.positionViewAtEnd())
+            // follow the answer as it is written, unless the user scrolled up to read
+            property bool stick: true
+            onMovementEnded: stick = atYEnd
+            onCountChanged: { stick = true; Qt.callLater(() => chat.positionViewAtEnd()) }
+            onContentHeightChanged: if (stick && aiCtrl.busy) Qt.callLater(() => chat.positionViewAtEnd())
             delegate: Item {
                 id: msg
-                required property var modelData
+                required property var entry
                 required property int index
                 width: ListView.view.width - 10
                 height: bubble.height
-                readonly property bool isUser: modelData.role === "user"
-                readonly property var allSources: modelData.sources || []
-                readonly property var cited: modelData.cited || []
+                readonly property bool isUser: entry.role === "user"
+                readonly property var allSources: entry.sources || []
+                readonly property var cited: entry.cited || []
+                readonly property string phase: entry.phase || (entry.pending ? "searching" : "done")
                 property bool showAll: false
+                // Biblical references start collapsed when Gemini writes an answer (so the answer
+                // is what you see), and open when there's no AI answer (the verses are the answer).
+                property bool refsToggled: false
+                property bool refsUserOpen: false
+                readonly property bool refsOpen: refsToggled ? refsUserOpen : entry.mode !== "ai"
                 // cited passages first (in citation order), then the rest
                 readonly property var ordered: {
                     var out = [], seen = {}
@@ -121,34 +133,35 @@ Item {
                     anchors.right: msg.isUser ? parent.right : undefined
                     width: msg.isUser ? Math.min(parent.width * 0.8, userText.implicitWidth + 28) : parent.width
                     height: msgCol.implicitHeight + 24
-                    radius: 12
+                    radius: Theme.s(12)
                     color: msg.isUser ? Theme.accent : Theme.surface
                     border.color: msg.isUser ? Theme.accent : Theme.border
                     ColumnLayout {
                         id: msgCol
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 8
+                        anchors.margins: Theme.s(12)
+                        spacing: Theme.s(8)
                         Text {
                             id: userText
                             visible: msg.isUser
                             Layout.fillWidth: true
-                            text: msg.modelData.text
+                            text: msg.entry.text
                             color: "white"
                             font.family: Theme.font; font.pixelSize: Theme.fontSize
                             wrapMode: Text.Wrap
                         }
                         RowLayout {
-                            visible: !msg.isUser && msg.modelData.pending === true
-                            BusyIndicator { implicitWidth: 22; implicitHeight: 22; running: parent.visible }
-                            Small { text: root.gen.available && root.gen.enabled ? "Searching the Bibles and writing an answer…" : "Searching the Bibles…" }
+                            visible: !msg.isUser && msg.phase === "searching"
+                            BusyIndicator { implicitWidth: Theme.s(22); implicitHeight: Theme.s(22); running: parent.visible }
+                            Small { text: aiCtrl.warmup.state === "loading" ? "Loading the search engine, then searching the Bibles…"
+                                                                            : "Searching the Bibles…" }
                         }
                         Text {
-                            visible: !msg.isUser && !msg.modelData.pending
+                            visible: !msg.isUser && msg.phase !== "searching" && (msg.entry.text || "") !== ""
                             Layout.fillWidth: true
-                            text: msg.modelData.text || ""
-                            textFormat: msg.modelData.error ? Text.PlainText : Text.MarkdownText
-                            color: msg.modelData.error ? Theme.danger : Theme.text
+                            text: msg.entry.text || ""
+                            textFormat: msg.entry.error ? Text.PlainText : Text.MarkdownText
+                            color: msg.entry.error ? Theme.danger : Theme.text
                             linkColor: Theme.accent
                             font.family: Theme.font; font.pixelSize: Theme.fontSize + 1
                             lineHeight: 1.15
@@ -161,42 +174,64 @@ Item {
                             }
                             HoverHandler { cursorShape: parent.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
                         }
+                        // Gemini status while the answer is being written
+                        RowLayout {
+                            visible: !msg.isUser && msg.phase === "generating"
+                            spacing: Theme.s(8)
+                            BusyIndicator { implicitWidth: Theme.s(20); implicitHeight: Theme.s(20); running: parent.visible }
+                            Small {
+                                text: (msg.entry.text || "") === "" || msg.entry.stalled ? "Gemini is thinking…" : "Gemini is writing…"
+                                color: Theme.accent
+                                font.italic: true
+                            }
+                        }
                         Small {
-                            visible: !msg.isUser && !msg.modelData.pending && ((msg.modelData.language || "") !== "" || (msg.modelData.model || "") !== "")
+                            visible: !msg.isUser && msg.phase === "done" && !msg.entry.error
+                            Layout.fillWidth: true
                             color: Theme.textFaint
-                            text: [msg.modelData.mode === "ai" ? "Written by " + msg.modelData.model + " from the passages below" : "",
-                                   (msg.modelData.language || "") !== "" ? "Question language: " + msg.modelData.language : ""]
-                                  .filter(x => x !== "").join("  ·  ")
+                            text: {
+                                var e = msg.entry, t = e.timing || {}, parts = []
+                                if (e.mode === "ai") parts.push("Written by " + e.model + " from the passages below")
+                                if ((e.language || "") !== "") parts.push("Question language: " + e.language)
+                                if (t.search !== undefined) parts.push("passages found in " + t.search + " s")
+                                if (t.first !== undefined) parts.push("first words after " + t.first + " s")
+                                if (t.total !== undefined) parts.push("done in " + t.total + " s")
+                                return parts.join("  ·  ")
+                            }
                         }
                         Repeater {
-                            model: msg.isUser ? [] : (msg.modelData.notes || [])
+                            model: msg.isUser ? [] : (msg.entry.notes || [])
                             delegate: Small { required property var modelData; Layout.fillWidth: true; text: "⚠ " + modelData; color: Theme.warning }
                         }
                         // ---- sources
-                        SectionLabel {
+                        AppButton {
                             visible: !msg.isUser && msg.allSources.length > 0
-                            text: msg.cited.length > 0 ? "Cited passages" : "Biblical references"
-                            Layout.topMargin: 4
+                            Layout.topMargin: Theme.s(2)
+                            compact: true
+                            variant: "ghost"
+                            text: (msg.refsOpen ? "▾  Hide " : "▸  Show ") + "Biblical references ("
+                                  + (msg.cited.length > 0 ? msg.cited.length + " cited, " : "") + msg.allSources.length + " found)"
+                            onClicked: { msg.refsUserOpen = !msg.refsOpen; msg.refsToggled = true }
                         }
                         Repeater {
-                            model: msg.isUser ? [] : msg.ordered.slice(0, msg.shownCount)
+                            model: msg.isUser || !msg.refsOpen ? [] : msg.ordered.slice(0, msg.shownCount)
                             delegate: Rectangle {
                                 id: src
                                 required property var modelData
                                 readonly property var s: modelData.s
                                 Layout.fillWidth: true
                                 implicitHeight: srcCol.implicitHeight + 16
-                                radius: 8
+                                radius: Theme.s(8)
                                 color: Theme.surfaceAlt
                                 border.color: src.modelData.cited ? "#C7D7FE" : Theme.border
                                 ColumnLayout {
                                     id: srcCol
                                     anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 4
+                                    anchors.margins: Theme.s(8)
+                                    spacing: Theme.s(4)
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        spacing: 8
+                                        spacing: Theme.s(8)
                                         Text {
                                             text: "<a href='#'>" + src.s.reference + "</a>"
                                             textFormat: Text.RichText
@@ -232,7 +267,7 @@ Item {
                             }
                         }
                         AppButton {
-                            visible: !msg.isUser && msg.ordered.length > msg.shownCount || msg.showAll && msg.ordered.length > 5
+                            visible: !msg.isUser && msg.refsOpen && (msg.ordered.length > msg.shownCount || msg.showAll && msg.ordered.length > 5)
                             compact: true
                             variant: "ghost"
                             text: msg.showAll ? "Show fewer passages"
@@ -248,7 +283,7 @@ Item {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 40, 520)
                 visible: chat.count === 0
-                spacing: 10
+                spacing: Theme.s(10)
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     text: "Ask about the Bible"
@@ -260,14 +295,14 @@ Item {
                     horizontalAlignment: Text.AlignHCenter
                     text: "Ask in any language. Answers are grounded in the Bible versions you index (Ang Dating Biblia and King James Version by default)."
                 }
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 6
-                    Repeater {
-                        model: ["What does the Bible say about forgiveness?", "What does Jesus teach about loving your enemies?",
-                                "Explain Romans 8:28", "Ano ang sinasabi ng Bibliya tungkol sa pananampalataya?",
-                                "Compare John 3:16"]
-                        delegate: Chip { required property string modelData; text: modelData; onClicked: input.text = modelData }
+                // example questions, centered under the heading
+                Repeater {
+                    model: ["Mga talata tungkol sa mabubuting gawa", "What are the commandments of our lord Jesus?"]
+                    delegate: Chip {
+                        required property string modelData
+                        Layout.alignment: Qt.AlignHCenter
+                        text: modelData
+                        onClicked: input.text = modelData
                     }
                 }
             }
@@ -276,7 +311,7 @@ Item {
         // ---- input
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(110, Math.max(44, input.implicitHeight))
@@ -287,7 +322,7 @@ Item {
                     font.family: Theme.font; font.pixelSize: Theme.fontSize
                     color: Theme.text
                     placeholderTextColor: Theme.textFaint
-                    leftPadding: 12; rightPadding: 12; topPadding: 11; bottomPadding: 11
+                    leftPadding: Theme.s(12); rightPadding: Theme.s(12); topPadding: Theme.s(11); bottomPadding: Theme.s(11)
                     background: Rectangle {
                         radius: Theme.radiusSmall
                         color: Theme.surface
@@ -301,8 +336,8 @@ Item {
                     }
                 }
             }
-            AppButton { text: "Send"; variant: "primary"; implicitHeight: 44; enabled: !aiCtrl.busy && input.text.trim() !== ""; onClicked: root.send() }
-            AppButton { text: "Clear"; implicitHeight: 44; enabled: !aiCtrl.busy && chat.count > 0; onClicked: aiCtrl.clearChat() }
+            AppButton { text: "Send"; variant: "primary"; implicitHeight: Theme.s(44); enabled: !aiCtrl.busy && input.text.trim() !== ""; onClicked: root.send() }
+            AppButton { text: "Clear"; implicitHeight: Theme.s(44); enabled: !aiCtrl.busy && chat.count > 0; onClicked: aiCtrl.clearChat() }
         }
     }
 
@@ -333,7 +368,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 6
+                spacing: Theme.s(6)
                 ScrollBar.vertical: ScrollBar {}
                 model: compareDlg.rows.filter(r => { var q = cmpFilter.text.toLowerCase(); return !q || (r.abbr + " " + r.language).toLowerCase().indexOf(q) >= 0 })
                 delegate: ColumnLayout {

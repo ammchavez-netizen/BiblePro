@@ -1,5 +1,5 @@
 @echo off
-rem Starts BiblePro. First run creates .venv and installs dependencies.
+rem Starts BibleQ-AI. First run creates .venv and installs dependencies.
 cd /d "%~dp0"
 if not exist ".venv\Scripts\pythonw.exe" (
     echo Setting up Python environment - first run only...

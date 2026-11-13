@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 TIMEOUT_S = 60
@@ -147,11 +147,51 @@ class GeminiClient:
         info["seconds"] = round(time.time() - t0, 1)
         return info
 
-    def generate(self, model: str, prompt: str, system: str = "", temperature: float = 0.3,
-                 max_tokens: int = 2048, retries: int = 1) -> str:
+    def stream(self, model: str, prompt: str, system: str = "", temperature: float = 0.3,
+               max_tokens: int = 2048, retries: int = 1) -> Iterator[str]:
+        """Yield the answer in pieces as Gemini writes it.
+
+        A rate-limit/server error before anything arrived is retried once; after text has
+        started arriving, errors are raised (the caller keeps what it already has)."""
         types = self._types
         cfg = types.GenerateContentConfig(temperature=temperature, max_output_tokens=max_tokens,
                                           system_instruction=system or None)
+        for attempt in range(retries + 1):
+            got_text = False
+            last = None
+            try:
+                for chunk in self._client.models.generate_content_stream(model=model, contents=prompt, config=cfg):
+                    last = chunk
+                    try:
+                        piece = chunk.text or ""
+                    except Exception:
+                        piece = ""
+                    if piece:
+                        got_text = True
+                        yield piece
+            except Exception as exc:
+                err = classify(exc, self._key)
+                if not got_text and err.kind in ("rate_limit", "server") and attempt < retries:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise err from None
+            if not got_text:
+                fb = getattr(last, "prompt_feedback", None) if last is not None else None
+                if fb is not None and getattr(fb, "block_reason", None):
+                    raise GeminiError("blocked", FRIENDLY["blocked"])
+                cands = (getattr(last, "candidates", None) or []) if last is not None else []
+                reason = str(getattr(cands[0], "finish_reason", "")) if cands else ""
+                if any(w in reason for w in ("SAFETY", "PROHIBITED", "BLOCK")):
+                    raise GeminiError("blocked", FRIENDLY["blocked"])
+                raise GeminiError("empty", FRIENDLY["empty"])
+            return
+
+    def generate(self, model: str, prompt: str, system: str = "", temperature: float = 0.3,
+                 max_tokens: int = 2048, retries: int = 1, json_mode: bool = False) -> str:
+        types = self._types
+        cfg = types.GenerateContentConfig(temperature=temperature, max_output_tokens=max_tokens,
+                                          system_instruction=system or None,
+                                          response_mime_type="application/json" if json_mode else None)
         for attempt in range(retries + 1):
             try:
                 resp = self._client.models.generate_content(model=model, contents=prompt, config=cfg)
@@ -180,16 +220,61 @@ class GeminiClient:
 
 
 # ======================================================================= RAG prompt
-SYSTEM_PROMPT = """You are BiblePro's Bible research assistant.
+SYSTEM_PROMPT = """You are BibleQ-AI's Bible research assistant. You answer questions about the Bible clearly and helpfully, like a knowledgeable Bible teacher.
 
 Rules you must always follow:
 1. LANGUAGE: Write the whole answer in {language}. Match the language of the user's question even if the passages are in another language.
-2. GROUNDING: Base the answer only on the Bible passages provided in the user message. You may explain and connect them, but do not add verses, quotations, or references that are not provided.
-3. CITATIONS: Cite passages only with their IDs in square brackets, e.g. [V1] or [V2][V5]. Never write a citation ID that is not in the list. Never invent a book, chapter or verse number.
-4. QUOTES: When quoting, quote the passage text exactly as given. You may translate a quotation into the answer language, and then say it is a translation.
-5. HONESTY: If the passages do not answer the question, say so plainly and briefly; do not guess.
-6. TONE: Respectful, clear and neutral. Present major Christian interpretations fairly when they differ instead of taking a denominational side.
-7. FORMAT: Start with a direct answer in 1-3 sentences, then supporting points. Use short paragraphs or bullet points (Markdown). Keep it under about 350 words unless the user asks for more."""
+2. ANSWER THE QUESTION: Answer what was actually asked, directly, in the first 1-2 sentences. For "why" or "what does it mean" questions, explain the reason or meaning, not just what the verses say. For follow-up questions, use the earlier conversation to understand what the user means.
+3. EVIDENCE: Support the answer with the Bible passages provided in the user message. Some passages may be unrelated to the question: ignore those. You may use general, widely accepted biblical and historical background to explain and connect the passages.
+4. CITATIONS: Cite passages only with their IDs in square brackets, e.g. [V1] or [V2][V5]. Never write a citation ID that is not in the list, and never write a book, chapter or verse reference that is not among the passages.
+5. QUOTES: Quote passage text exactly as given. You may translate a quotation into the answer language, and then say it is a translation.
+6. HONESTY: If the passages don't contain what is needed, say what the Bible passages do show and what is missing, briefly. Never invent verses or claim the Bible says something it doesn't. Where Christians interpret something differently, say so briefly and fairly instead of taking a denominational side.
+7. STYLE: Write naturally. Don't begin with phrases like "Based on the provided passages". Use short paragraphs or bullet points (Markdown). Keep it under about 350 words unless the user asks for more."""
+
+
+PLAN_PROMPT = """You help a Bible search engine find the passages needed to answer a question.
+Return JSON only, in this form:
+{"references": ["Matthew 27:51-53", "John 11:43-44"], "query": "standalone search question"}
+
+- "references": up to 8 Bible passages (English book names, chapter:verse or chapter:verse-verse; never a whole chapter) that most directly answer the question. Include the key passages a Bible scholar would look up first. Only real references you are confident about.
+- "query": the question rewritten as a standalone search question in English, including what earlier turns of the conversation refer to (e.g. "it", "that", "then")."""
+
+
+@dataclass
+class SearchPlan:
+    references: list[str] = field(default_factory=list)
+    query: str = ""
+
+
+def plan_search(client: "GeminiClient", model: str, question: str,
+                history: Sequence[tuple[str, str]] = ()) -> SearchPlan:
+    """Ask Gemini which passages to look up (fast, small request). The verses themselves are
+    then read from the local Bibles, so nothing Gemini suggests is shown unless it exists."""
+    import json
+    lines = []
+    for q, a in list(history)[-2:]:
+        lines.append(f"User: {q[:400]}")
+        lines.append("Assistant: " + re.sub(r"\s+", " ", a)[:500])
+    lines.append(f"Question: {question}")
+    raw = client.generate(model, "\n".join(lines), system=PLAN_PROMPT, temperature=0.0,
+                          max_tokens=400, retries=0, json_mode=True)
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group(0)) if m else {}
+    refs = [str(r).strip() for r in (data.get("references") or []) if str(r).strip()][:8]
+    return SearchPlan(refs, str(data.get("query") or "").strip()[:400])
+
+
+def readable_history(plain: str, sources: Sequence[dict]) -> str:
+    """An earlier answer with its [Vn] markers replaced by the actual references."""
+    def repl(m):
+        n = int(m.group(1))
+        return f" ({nice_reference(sources[n - 1]['reference'])})" if 1 <= n <= len(sources) else ""
+    return re.sub(r"\s?\[V(\d+)\]", repl, plain or "")
 
 
 @dataclass
@@ -260,6 +345,13 @@ def validate_citations(text: str, n_passages: int) -> CheckedAnswer:
     return CheckedAnswer(clean.strip(), cited, invalid)
 
 
+def nice_reference(ref: str) -> str:
+    """'II TIMOTHY 3:4' -> 'II Timothy 3:4' (roman numerals stay upper case)."""
+    if not ref.isupper():
+        return ref
+    return " ".join(w if re.fullmatch(r"[IVX]+", w) else w.title() for w in ref.split(" "))
+
+
 def link_citations(text: str, sources: Sequence[dict]) -> str:
     """Replace citation markers with Markdown links for the chat view.
 
@@ -268,13 +360,19 @@ def link_citations(text: str, sources: Sequence[dict]) -> str:
     """
     def label(n):
         s = sources[n - 1]
-        ref = s["reference"].title() if s["reference"].isupper() else s["reference"]
-        return f"[{ref} · {s['abbr']}](cite:{n})"
+        return f"[{nice_reference(s['reference'])} · {s['abbr']}](cite:{n})"
 
     def repl(m):
         nums = [int(x) for x in re.findall(r"\[V(\d+)\]", m.group(0))]
         return " (" + "; ".join(label(n) for n in nums) + ")"
     return re.sub(r"\s?(?:\[V\d+\])+", repl, text)
+
+
+def display_partial(text: str, sources: Sequence[dict]) -> str:
+    """Text written so far, ready to show: a half-written "[V1" at the end is hidden,
+    complete citations become links, citations to unknown passages are dropped."""
+    text = re.sub(r"\[\s*V?\d*[\s,;V\d]*$", "", text)
+    return link_citations(validate_citations(text, len(sources)).text, sources)
 
 
 def answer(client: GeminiClient, model: str, question: str, language_name: Optional[str],

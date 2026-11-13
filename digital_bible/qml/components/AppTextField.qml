@@ -11,8 +11,8 @@ TextField {
     selectionColor: "#BFDBFE"
     selectedTextColor: Theme.text
     implicitHeight: Theme.controlHeight
-    leftPadding: 12
-    rightPadding: 12
+    leftPadding: Theme.s(12)
+    rightPadding: Theme.s(12)
     background: Rectangle {
         radius: Theme.radiusSmall
         color: control.enabled ? Theme.surface : Theme.surfaceAlt

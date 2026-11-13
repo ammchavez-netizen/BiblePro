@@ -4,4 +4,6 @@ __pycache__/
 *.pyc
 build/
 dist/
+build-full/
+dist-full/
 *.spec

@@ -10,10 +10,10 @@ Item {
     implicitHeight: inner.childrenRect.height + padding * 2
 
     // soft shadow: two faint layers offset downward
-    Rectangle { anchors.fill: bgRect; anchors.topMargin: 3; anchors.bottomMargin: -3
-        radius: bgRect.radius + 1; color: Qt.rgba(15/255, 23/255, 42/255, 0.035) }
-    Rectangle { anchors.fill: bgRect; anchors.topMargin: 1; anchors.bottomMargin: -1
-        radius: bgRect.radius; color: Qt.rgba(15/255, 23/255, 42/255, 0.05) }
+    Rectangle { anchors.fill: bgRect; anchors.margins: -2; anchors.topMargin: Theme.s(4); anchors.bottomMargin: -6
+        radius: bgRect.radius + 3; color: Qt.rgba(30/255, 60/255, 140/255, 0.035) }
+    Rectangle { anchors.fill: bgRect; anchors.topMargin: Theme.s(2); anchors.bottomMargin: -2
+        radius: bgRect.radius; color: Qt.rgba(30/255, 60/255, 140/255, 0.05) }
     Rectangle {
         id: bgRect
         anchors.fill: parent

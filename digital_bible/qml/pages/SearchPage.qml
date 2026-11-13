@@ -13,19 +13,24 @@ Item {
         spacing: Theme.gap
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.s(8)
             AppTextField {
                 id: query
                 Layout.fillWidth: true
-                placeholderText: "Search words…   (all words must match; \"quotes\" for an exact phrase)"
+                implicitHeight: Theme.s(38)
+                placeholderText: "Search words or a \"phrase\"…"
+                ToolTip.visible: hovered && text === ""; ToolTip.delay: 700
+                ToolTip.text: "All words must match. Put an exact phrase in \"quotes\"."
                 onAccepted: ctrl.search(text, scope.currentIndex)
             }
             AppComboBox {
                 id: scope
-                Layout.preferredWidth: 190
+                Layout.preferredWidth: Theme.s(150)
+                implicitHeight: Theme.s(38)
                 model: ["Whole Bible", "Old Testament", "New Testament", "Current book"]
             }
-            AppButton { text: "Search"; variant: "primary"; onClicked: ctrl.search(query.text, scope.currentIndex) }
+            AppButton { text: "Search"; iconName: "search"; variant: "primary"; implicitHeight: Theme.s(38); font.pixelSize: Theme.s(14)
+                        onClicked: ctrl.search(query.text, scope.currentIndex) }
         }
         Text {
             Layout.fillWidth: true
@@ -40,7 +45,7 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            spacing: 2
+            spacing: Theme.s(2)
             model: ctrl.searchResults
             ScrollBar.vertical: ScrollBar {}
             delegate: Rectangle {
@@ -48,14 +53,14 @@ Item {
                 required property var modelData
                 width: ListView.view.width
                 height: Math.max(40, body.implicitHeight + 16)
-                radius: 6
+                radius: Theme.s(6)
                 color: ma.containsMouse ? Theme.accentSoft : "transparent"
                 RowLayout {
                     anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 12
+                    anchors.margins: Theme.s(8)
+                    spacing: Theme.s(12)
                     Text {
-                        Layout.preferredWidth: 130
+                        Layout.preferredWidth: Theme.s(130)
                         Layout.alignment: Qt.AlignTop
                         text: item.modelData.reference
                         font.family: Theme.font; font.pixelSize: Theme.fontSize; font.weight: Font.DemiBold
@@ -81,12 +86,28 @@ Item {
                     onClicked: ctrl.showKey(item.modelData.key)
                 }
             }
-            Text {
+            Column {
                 anchors.centerIn: parent
                 visible: results.count === 0
-                text: "No results yet"
-                font.family: Theme.font; font.pixelSize: Theme.fontSize
-                color: Theme.textFaint
+                spacing: Theme.s(10)
+                Icon {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: results.height > Theme.s(150)
+                    name: "book"; size: Theme.s(56); strokeWidth: 1.6
+                    color: "#8DB1F7"
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: ctrl.searchInfo !== "" ? "No matches" : "No results yet"
+                    font.family: Theme.font; font.pixelSize: Theme.s(21); font.weight: Font.Medium
+                    color: Theme.text
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: ctrl.searchInfo !== "" ? "Try fewer or different words." : "Enter a word or phrase above to search the Bible."
+                    font.family: Theme.font; font.pixelSize: Theme.s(14)
+                    color: "#2F4A9C"
+                }
             }
         }
     }

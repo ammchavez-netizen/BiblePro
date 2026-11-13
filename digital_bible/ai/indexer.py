@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, Optional
@@ -88,7 +88,7 @@ class IndexManager:
         self._cancel = threading.Event()
         self._lock = threading.Lock()
         self.sources: list[BibleSource] = []
-        self.log = logging.getLogger("biblepro.index")
+        self.log = logging.getLogger("bibleq.index")
         if not self.log.handlers:
             h = RotatingFileHandler(self.index_dir / "indexing.log", maxBytes=1_000_000,
                                     backupCount=2, encoding="utf-8")
